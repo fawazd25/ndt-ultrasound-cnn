@@ -3,3 +3,4 @@ __pycache__/
 sorties/*.pt
 sorties/*.onnx
 .idea/
+.DS_Store
