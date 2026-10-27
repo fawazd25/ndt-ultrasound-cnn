@@ -1,6 +1,6 @@
 # Journal d'apprentissage : réseaux de neurones et projet CNN
 
-Je tiens ce journal pour garder une trace de ce que j'apprends au fil du projet, avec mes questions et les réponses que j'ai obtenues. Les réponses aux exercices du guide sont rangées à part, dans `projet_ndt_cnn/reponses_exercices.md`.
+Je tiens ce journal pour garder une trace de ce que j'apprends au fil du projet, avec mes questions et les réponses que j'ai obtenues. Les réponses aux exercices du guide sont rangées à part, dans `reponses_exercices.md`.
 
 ## Lundi 26 octobre 2026 (semaine 1)
 
@@ -208,7 +208,7 @@ Avec `difficulte=2.0`, j'ai cru voir deux défauts sur un des signaux défectueu
 
 Ce qui m'a surpris, c'est la facilité avec laquelle l'œil trouve des motifs dans du bruit, et avec assurance. Un pic qui dépasse un peu les autres ressemble à un défaut, même quand il n'y en a pas. Pour juger un détecteur, humain ou réseau, il faut donc comparer à la vérité connue, pas se fier à l'impression. Et je comprends mieux l'intérêt du CNN : ses filtres peuvent reconnaître la forme d'une impulsion (une petite oscillation précise) là où je ne regarde que la hauteur des pics.
 
-![Le signal DÉFAUT avec et sans bruit : le défaut est vers l'échantillon 351](projet_ndt_cnn/sorties/defaut_annote.png)
+![Le signal DÉFAUT avec et sans bruit : le défaut est vers l'échantillon 351](sorties/defaut_annote.png)
 
 ### Questions encore ouvertes
 

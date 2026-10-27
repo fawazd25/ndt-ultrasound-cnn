@@ -1,6 +1,6 @@
 # Réponses aux exercices
 
-Mes réponses aux exercices du guide, étape par étape. Ce que j'ai compris en chemin est dans `../journal.md`.
+Mes réponses aux exercices du guide, étape par étape. Ce que j'ai compris en chemin est dans `journal.md`.
 
 ## Étape 0 : rétropropagation à la main (`00_backprop_numpy.py`)
 
