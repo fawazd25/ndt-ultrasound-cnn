@@ -13,7 +13,7 @@ class CNN1D(nn.Module):
     moyenne globale et une couche linéaire qui décide.
     """
 
-    def __init__(self, canaux=(8, 16, 32, 32), noyau=9):
+    def __init__(self, canaux=(8, 16, 32, 32, 32), noyau=15):
         super().__init__()
         couches, c_in = [], 1
         for c_out in canaux:

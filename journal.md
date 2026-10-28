@@ -210,7 +210,119 @@ Ce qui m'a surpris, c'est la facilité avec laquelle l'œil trouve des motifs da
 
 ![Le signal DÉFAUT avec et sans bruit : le défaut est vers l'échantillon 351](sorties/defaut_annote.png)
 
+### Ce qu'est un écho de fond
+
+Le capteur ultrasonore envoie une courte impulsion dans la pièce, puis écoute ce qui revient. Une partie du son rebondit tout de suite sur la surface d'entrée : c'est l'écho d'entrée, le grand pic vers l'échantillon 50. Le reste traverse le métal jusqu'à la face opposée, rebondit et revient : c'est l'écho de fond. Il arrive plus tard parce que le son a fait l'aller-retour dans toute l'épaisseur, et il est plus faible parce que le matériau a absorbé une partie de l'énergie en chemin.
+
+Sur un A-scan, le temps correspond donc à la profondeur. Plus la pièce est épaisse, plus l'écho de fond arrive tard, et c'est pour ça qu'il se déplace autant d'un signal à l'autre dans la figure des 20 signaux superposés.
+
+Un défaut (une fissure, une bulle) est un obstacle entre les deux faces. Il renvoie un petit écho entre l'écho d'entrée et l'écho de fond, et il bloque une partie du son, ce qui rend l'écho de fond un peu plus faible : le simulateur appelle ça l'ombre du défaut (ligne 62). La position de l'écho du défaut indique à quelle profondeur il se trouve.
+
+### La simplification du simulateur la plus éloignée de la réalité
+
+Pour moi, c'est la façon dont le simulateur représente le défaut, l'obstacle dans la pièce (lignes 61 à 65 de `simulateur.py`).
+
+Dans le simulateur, un défaut est toujours le même objet : une copie de l'impulsion d'entrée, avec une amplitude tirée au hasard, placée au hasard entre les deux faces. Il y en a au plus un par pièce, et rien ne dit s'il s'agit d'une fissure, d'une bulle ou d'une inclusion, ni quelle est sa taille ou son orientation.
+
+Dans une vraie pièce, ce sont justement ces propriétés qui déterminent l'écho. Une fissure orientée dans l'axe du faisceau renvoie peu de son, alors qu'une fissure perpendiculaire renvoie un écho fort. Plusieurs défauts peuvent coexister, et l'écho d'un défaut n'a pas forcément la même forme que l'impulsion de départ.
+
+Un détail du code le montre bien : l'amplitude de l'écho du défaut et l'ombre qu'il fait sur l'écho de fond sont tirées séparément (lignes 62 et 64). Un petit défaut peut donc faire une grosse ombre, et inversement. Physiquement, un défaut plus grand devrait à la fois renvoyer plus de son et en bloquer davantage.
+
+Conséquence : un réseau entraîné sur ce simulateur apprend à reconnaître un seul type d'écho, toujours de la même forme. Rien ne garantit qu'il reconnaîtrait les défauts variés d'une vraie pièce. C'est le point « un seul type de défaut » de la section 10 du guide.
+
+D'autres simplifications comptent aussi, comme les classes équilibrées à 50/50 alors que les défauts sont rares en réalité, ou les étiquettes parfaites alors qu'en vrai il faut un expert pour les obtenir. Mais celle du défaut touche directement ce que le réseau apprend à détecter.
+
+### Ma machine suffit-elle pour entraîner ?
+
+J'ai un MacBook Pro 14 pouces avec une puce M5 et 24 Go de mémoire. Pour ce projet, c'est largement suffisant. Le CNN de `modele.py` a environ 15 000 paramètres et s'entraîne sur 6 000 signaux de 512 points : le guide annonce 1 à 2 minutes sur un ordinateur ordinaire. Les scripts tournent sur le processeur (CPU), car ils ne précisent aucun `device`.
+
+PyTorch peut aussi utiliser la puce graphique des Mac Apple Silicon avec `device="mps"`. Pour un modèle aussi petit, ça n'accélère probablement pas grand-chose : copier les données vers la puce graphique coûte plus cher que le calcul lui-même. Une carte graphique devient indispensable pour des modèles de millions de paramètres ou des images en grand nombre, pas ici.
+
+### Premier entraînement du CNN (`03_train_cnn.py`)
+
+Le modèle a 15 169 paramètres. L'entraînement de 60 epochs a duré 240 secondes sur mon Mac, deux fois plus que les 1 à 2 minutes annoncées par le guide. Je ne sais pas encore pourquoi.
+
+![Courbes d'entraînement](sorties/courbes_entrainement.png)
+
+À l'epoch 1, la perte vaut 0,6934, presque exactement ln 2 = 0,6931 : c'est la perte d'un modèle qui répond 50/50 au hasard, et l'exactitude est de 0,501. Le réseau n'a encore rien appris. Entre les epochs 3 et 8, la perte stagne vers 0,64 et l'exactitude vers 0,65, puis l'apprentissage démarre vraiment vers l'epoch 10. L'exactitude de validation finit autour de 0,85 à 0,86, comme le guide l'annonce.
+
+La perte de validation passe souvent sous la perte d'entraînement. Ce n'est pas une erreur : la perte d'entraînement est une moyenne calculée pendant que les poids changent au fil de l'epoch, alors que la validation est mesurée après, avec les poids déjà améliorés.
+
+La courbe d'exactitude a des creux brusques, par exemple 0,785 à l'epoch 30 entre deux epochs à 0,83 et 0,84. Les mises à jour se font par mini-lots de 64 signaux, et chaque mini-lot donne une estimation un peu bruitée du gradient.
+
+La mention « sauvegardé » apparaît quand la perte de validation bat son record. Le fichier `sorties/cnn_meilleur.pt` contient donc le modèle de l'epoch 55 (perte de validation 0,3380, exactitude 0,855), pas celui de l'epoch 60. On garde le meilleur modèle selon la validation plutôt que le dernier, parce que la validation peut se dégrader en fin d'entraînement.
+
+### Entraîner sur la puce graphique du Mac (MPS)
+
+Par curiosité, j'ai fait une variante du script d'entraînement, `03_train_cnn_mps.py`, qui utilise la puce graphique du Mac à travers le backend MPS de PyTorch. Le modèle, les données et la boucle sont identiques : seul le « device » change. Il faut y placer le modèle et les données avec `.to(device)`, copier les données une seule fois avant la boucle, ramener les poids sur le processeur avant de les sauvegarder, et attendre la fin des calculs (`torch.mps.synchronize()`) avant d'arrêter le chronomètre.
+
+| Device | Durée (60 epochs) | Meilleure epoch | Perte val | Exactitude val |
+|---|---|---|---|---|
+| CPU | 240 s | 55 | 0,3380 | 0,855 |
+| MPS | 16 s | 60 | 0,3322 | 0,864 |
+
+La puce graphique est 15 fois plus rapide. Je m'attendais à moins, parce que le modèle est petit et que les mini-lots de 64 signaux laissent peu de travail au GPU à chaque étape. Ce résultat suggère surtout que le processeur était mal exploité : 240 s pour 15 000 paramètres, c'était lent.
+
+Les résultats ne sont pas identiques aux décimales près, alors que la graine est la même. Le mélange des données est tiré par un générateur différent sur la puce graphique, et les calculs en virgule flottante n'y sont pas faits exactement dans le même ordre. Les deux entraînements arrivent au même niveau, autour de 85 à 86 % d'exactitude, ce qui est ce qui compte.
+
+Ensuite, j'ai gardé un seul script. Deux fichiers presque identiques auraient fini par diverger pendant les exercices. `03_train_cnn.py` choisit maintenant le device tout seul : la puce graphique si elle existe, sinon le processeur, donc il marche aussi sur une machine sans puce Apple. Il sauvegarde toujours dans `sorties/cnn_meilleur.pt`, avec les poids ramenés sur CPU, pour que les scripts 04 à 08 le retrouvent sans changement.
+
+Au passage, j'ai découvert un piège : ajouter seulement la ligne `device = torch.device(...)` ne change rien. Elle choisit le device mais n'y déplace rien. Tant que le modèle et les données ne sont pas envoyés avec `.to(device)`, tout tourne sur le processeur, sans erreur ni avertissement. Et si on ne déplace que l'un des deux, PyTorch s'arrête avec une erreur, parce que le modèle et les données doivent être sur le même device.
+
+### Les méthodes de référence et la limite d'une porte fixe
+
+Le guide insiste sur une règle : toujours commencer par une méthode simple, pour savoir ce que le réseau doit battre. Sans point de comparaison, les 85 % du CNN ne voulaient rien dire. Avec la porte fixe à 65 % et la régression logistique à 50 %, je sais maintenant que le CNN apporte vraiment quelque chose.
+
+La porte, c'est le réglage d'un technicien : une fenêtre de temps et un seuil, avec une alarme si un écho dépasse le seuil dans la fenêtre. Je pensais qu'on ne pouvait pas l'étendre à tout le signal à cause du nombre d'entrées. En fait, c'est l'écho de fond qui bloque : présent partout et plus grand qu'un défaut, il dominerait le maximum de n'importe quelle fenêtre qui l'inclut. Comme il se déplace d'une pièce à l'autre, une fenêtre fixe ne peut pas l'éviter tout en couvrant les défauts profonds. Le CNN n'a pas ce problème : il apprend à reconnaître la forme d'un défaut et à la distinguer de l'écho de fond, où qu'ils soient.
+
+La régression logistique échoue pour une raison voisine. Elle donne un poids fixe à chaque position du signal, donc elle ne sait pas exprimer « il y a un petit écho quelque part ». C'est exactement ce que les convolutions savent faire, avec un même filtre qui glisse sur tout le signal.
+
+En remplaçant le maximum par la somme dans la porte, l'exactitude tombe de 65 % à 56 %. J'en retiens qu'un score doit ressembler à ce qu'on cherche. Un défaut est un petit événement local, donc un score qui additionne toute la fenêtre noie ce petit événement dans le bruit accumulé sur les 130 échantillons. Le maximum isole l'événement le plus fort, ce qui est déjà plus proche de la question posée.
+
+### Pourquoi on ne règle jamais rien sur le test
+
+Je ne savais pas répondre à cette question. Le test sert à prédire comment le modèle se comportera sur des pièces nouvelles. Dès qu'on choisit quelque chose en regardant le test, même un simple seuil, le test n'est plus « nouveau » pour ce choix, et le score devient trop optimiste. C'est comme réviser avec les questions exactes de l'examen : la note ne dit plus si on maîtrise la matière.
+
+D'où les trois jeux : l'entraînement pour apprendre les poids, la validation pour choisir les réglages, et le test pour mesurer une seule fois à la fin. Je retrouve la même logique dans `03_train_cnn.py`, qui garde le meilleur modèle selon la validation et ne touche jamais au test.
+
+### Comment `modele.py` construit ses blocs de convolution
+
+Le nombre de blocs n'est pas écrit en dur : la boucle `for c_out in canaux` crée un bloc [convolution, ReLU, max-pooling] par valeur du tuple `canaux`. Avec `(8, 16, 32, 32)`, il y a 4 blocs. Pour en ajouter un cinquième, il suffit d'ajouter une valeur, par exemple `(8, 16, 32, 32, 32)`. La variable `c_in` relie chaque bloc au suivant (les canaux de sortie de l'un deviennent les canaux d'entrée de l'autre), et la couche finale `nn.Linear(c_in, 1)` s'adapte toute seule au dernier nombre de canaux.
+
+Chaque `MaxPool1d(2)` divise la longueur du signal par deux : 512, puis 256, 128, 64, 32 après 4 blocs, et 16 après un cinquième. Chaque bloc voit donc une portion du signal d'origine deux fois plus large que le précédent : c'est ce qui permet de passer d'une petite oscillation à un écho entier, puis à un écho avec son contexte.
+
+Point d'attention : les scripts 04 à 08 créent le modèle avec `CNN1D()`, sans argument, puis chargent `sorties/cnn_meilleur.pt`. Si le fichier vient d'un modèle à 5 blocs, il faut que la valeur par défaut de `canaux` dans `modele.py` corresponde aussi à 5 blocs, sinon le chargement échoue.
+
+### Ce que m'ont appris les exercices de l'étape 4
+
+Changer un seul réglage à la fois et noter les chiffres dans un tableau m'a permis de voir l'effet de chacun.
+
+La taille du réseau compte moins que je ne pensais. Avec 4 fois plus de paramètres, le modèle apprend plus vite mais plafonne au même niveau, vers 86 %. Ce plafond vient des données : certains défauts sont plus faibles que le bruit. Ajouter de la capacité au-delà de ce que les données permettent sert surtout à mieux coller à l'entraînement.
+
+Le noyau, lui, a fait la différence : 15 au lieu de 9 donne le meilleur résultat (87,7 %). J'ai découvert le champ réceptif, la portion du signal qu'un neurone de la dernière couche voit. Il grandit avec le noyau et double à chaque max-pooling. Un filtre trop court (5 échantillons) ne voit même pas une oscillation complète de l'impulsion, qui dure environ 8 échantillons.
+
+Le taux d'apprentissage peut tout casser. À 1e-2, le réseau reste à 50 % pendant 60 epochs ; à 1e-4, il avance si lentement qu'il n'atteint que 70 %. C'est exactement l'image de la montagne : des pas trop longs ou trop courts.
+
+Le maximum global m'a piégé. J'ai prédit qu'il prendrait l'écho d'entrée, en oubliant que la normalisation l'efface. Le plus grand écho restant est l'écho de fond, présent partout, et le maximum le retient au détriment du petit défaut. Je dois relire ce que fait le prétraitement avant de prédire le comportement d'un modèle.
+
+### Décision : je garde un noyau de 15
+
+Après les exercices de l'étape 4, j'ai passé la valeur par défaut du noyau de 9 à 15 dans `modele.py` (`noyau=15`). C'est le réglage qui a donné le meilleur résultat sur la validation : perte 0,2941 et exactitude 0,877, contre 0,3322 et 0,864 avec 9. Le modèle passe de 15 169 à 25 201 paramètres, et l'entraînement de 16 à 20 secondes sur MPS. Tous les résultats à partir de l'étape 5 utilisent ce modèle. Comme ce choix a été fait sur la validation, le test reste une mesure honnête.
+
+J'ai ensuite gardé aussi le cinquième bloc : `canaux=(8, 16, 32, 32, 32)`. Avec le noyau 15, il fait passer la meilleure perte de validation de 0,2941 à 0,2728, et l'exactitude de 0,877 à 0,883. Le modèle final a 40 593 paramètres et s'entraîne en 23 secondes sur MPS. Une réserve : chaque configuration n'a été entraînée qu'une fois, et un entraînement relancé donne des chiffres un peu différents (je l'ai vu entre CPU et MPS). L'écart sur l'exactitude (0,6 point) est du même ordre que cette variation ; celui sur la perte est plus net. Le modèle de référence pour la suite du projet est donc : 5 blocs, noyau 15, moyenne globale, LR 1e-3.
+
+### À quoi sert le noyau d'une convolution
+
+Le noyau est la fenêtre de poids d'un filtre : une petite suite de nombres (15 ici) que le réseau apprend. Le filtre fait glisser cette fenêtre le long du signal. À chaque position, il multiplie les 15 échantillons sous la fenêtre par ses 15 poids et additionne : c'est la même somme pondérée qu'un neurone, appliquée à toutes les positions avec les mêmes poids. Le résultat est grand là où le morceau de signal ressemble à la forme des poids, et petit ailleurs. Un filtre est donc un détecteur de forme, et le noyau fixe la longueur de la forme qu'il peut reconnaître.
+
+Comme les mêmes poids servent à toutes les positions, le filtre reconnaît un écho où qu'il soit, ce que ne savaient faire ni la porte fixe ni la régression logistique. Le nombre de poids d'une convolution vaut canaux d'entrée × canaux de sortie × noyau : un noyau plus grand donne plus de paramètres, ce qui explique le passage à 25 201. Le `padding=noyau // 2` ajoute des zéros aux deux bouts pour que le signal garde sa longueur après la convolution.
+
+### Reconnaître le surapprentissage sur des courbes
+
+J'ai d'abord conclu au surapprentissage parce que la courbe de validation passait au-dessus de celle d'entraînement. Ce n'est pas le bon signe : la perte de validation est souvent un peu au-dessus, et c'est normal, puisque le modèle n'a jamais vu ces signaux. Le vrai signe est une tendance : la perte d'entraînement continue de baisser pendant que celle de validation stagne ou remonte, et l'écart entre les deux se creuse. Sur le modèle à 5 blocs, ça commence vers l'epoch 30. C'est aussi pour ça que le script garde le modèle de la meilleure epoch selon la validation, et pas celui de la dernière.
+
 ### Questions encore ouvertes
 
-- Vérifier que l'installation passe avec le timeout allongé, et décider si je recrée la venv sous Python 3.12.
+- Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.
+- Comprendre pourquoi l'entraînement sur CPU prend 240 s au lieu des 1 à 2 minutes annoncées, alors que la puce graphique le fait en 16 s.
 - Commencer la vidéo micrograd de Karpathy, maintenant que les vidéos 3Blue1Brown sont terminées.

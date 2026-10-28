@@ -110,8 +110,140 @@ Résultat : je ne repère correctement aucun des deux défauts. À ce niveau de 
 
 ### Exercice 2. Superposer 20 signaux sains normalisés
 
-À faire.
+J'ai ajouté une deuxième figure à la fin du bloc principal de `simulateur.py` : `generer(20, taux_defaut=0.0, seed=7)`, puis `normaliser`, puis les 20 signaux tracés sur le même graphique avec `alpha=0.5`.
+
+![20 signaux sains normalisés, superposés](sorties/signaux_sains_superposes.png)
+
+Ce qui varie le plus est la position de l'écho de fond. Les 20 signaux sont plats avant l'échantillon 100 (zone morte effacée par la normalisation), se ressemblent entre 100 et 270 (bruit), puis chacun a son grand pic quelque part entre 280 et 460 : c'est son écho de fond.
+
+Le simulateur tire l'épaisseur de la pièce au hasard entre 220 et 420 échantillons, et l'écho de fond arrive à `p_entree + epaisseur`, donc entre 255 et 475. Sa hauteur varie aussi (de 0,25 à 0,6 environ), à cause de l'atténuation tirée au hasard et de l'épaisseur.
+
+Conséquence pour le réseau : il ne peut pas chercher un pic à un endroit fixe. Il doit reconnaître un défaut à n'importe quelle position et le distinguer d'un écho de fond normal qui change de place et de hauteur.
 
 ### Exercice 3. La simplification la plus éloignée de la réalité
 
-À faire, à écrire dans le journal.
+La modélisation du défaut : un seul type d'écho, toujours de la même forme, sans taille, type ni orientation. Le raisonnement complet est dans `journal.md`, section « La simplification du simulateur la plus éloignée de la réalité ».
+
+## Étape 3 : les méthodes de référence (`02_baseline.py`)
+
+Résultats de départ, identiques à ceux du guide :
+
+```
+[porte fixe]  seuil=0.171  exactitude=0.653  rappel=0.607  précision=0.673  AUC=0.704
+[logistique]  exactitude=0.505  rappel=0.471  précision=0.510  AUC=0.502
+```
+
+La porte fixe fait 65 %, la régression logistique 50,5 %, c'est-à-dire le hasard. Le CNN de l'étape 4 atteint environ 85 % : il bat nettement les deux.
+
+### Exercice 1. Changer la fenêtre de la porte
+
+En changeant `G0, G1`, j'ai obtenu au mieux une exactitude de 0,636 (seuil 0,200), moins bien que les 0,653 de la fenêtre 100 à 230. Ma réponse : non, je ne trouve pas vraiment de meilleure fenêtre. Un balayage systématique des fenêtres confirme qu'on ne gagne presque rien : la meilleure, autour de 100 à 260, donne 0,657 sur le test, soit six images de mieux sur 2 000.
+
+Pourquoi ne pas mettre la porte sur tout le signal ? Ma première idée était le nombre d'entrées, mais ce n'est pas ça : la porte ne fait que prendre le maximum de la fenêtre, quelle que soit sa taille. La vraie raison, c'est l'écho de fond. Il est présent dans tous les signaux, sains ou défectueux, et il est nettement plus grand qu'un défaut. Sur tout le signal, le maximum serait presque toujours l'écho de fond, et le score ne distinguerait plus rien. Le test le confirme : avec la fenêtre 100 à 512, l'exactitude tombe à 0,504, le hasard.
+
+C'est aussi pour ça que la fenêtre s'arrête à 230 : l'écho de fond arrive au plus tôt vers l'échantillon 255 (pièce la plus fine). Mais les défauts peuvent se trouver jusque vers 430 dans les pièces épaisses. Une fenêtre fixe doit donc choisir entre rater ces défauts profonds et attraper l'écho de fond des pièces fines. Comme l'écho de fond change de place d'une pièce à l'autre (exercice 2 de l'étape 2), aucune fenêtre fixe ne règle le problème.
+
+### Exercice 2. Somme des valeurs absolues au lieu du maximum
+
+J'ai remplacé `.max(axis=1)` par `.sum(axis=1)` et adapté la plage de seuils aux valeurs de la somme :
+
+```
+[porte fixe]  seuil=3.820  exactitude=0.557  rappel=0.806  précision=0.541  AUC=0.572
+```
+
+C'est moins bien : l'exactitude passe de 0,653 à 0,557, et l'AUC de 0,704 à 0,572, pas loin du hasard.
+
+La somme mesure un total sur toute la fenêtre, là où le maximum ne regarde que le plus grand pic. Le problème, c'est ce que contient ce total. Un défaut est un événement local : son écho occupe une dizaine d'échantillons sur les 130 de la fenêtre, avec une petite amplitude. Le bruit et le grain, eux, sont présents sur toute la fenêtre. La somme additionne donc surtout du bruit, et le niveau de bruit varie beaucoup d'un signal à l'autre (le simulateur le tire au hasard). Au final, le score mesure surtout à quel point un signal est bruité, pas s'il contient un défaut. Le maximum, lui, réagit au pic le plus fort, ce qui convient mieux à la recherche d'un écho isolé.
+
+Le rappel élevé (0,806) avec une précision faible (0,541) va dans le même sens : le seuil choisi déclenche l'alarme sur beaucoup de signaux, y compris des signaux sains simplement plus bruités.
+
+### Exercice 3. Choisir le seuil sur la validation plutôt que sur le test
+
+Je n'avais pas trouvé seul. Le jeu de test sert à estimer comment la méthode se comportera sur des pièces qu'elle n'a jamais vues. Pour que cette estimation soit honnête, aucun réglage ne doit avoir été fait en regardant le test. Si on choisit le seuil qui donne le meilleur score sur le test, ce score devient en partie le fruit des particularités de ces 2 000 signaux-là : il est trop optimiste, et il ne dit plus ce qui se passera sur de nouvelles pièces.
+
+Chaque jeu a donc un rôle :
+
+| Jeu | Rôle | Dans le projet |
+|---|---|---|
+| entraînement | apprendre les poids | `generer(6000, seed=1)` |
+| validation | choisir les réglages (seuil, meilleure epoch, architecture) | `generer(2000, seed=2)` |
+| test | mesurer une seule fois, à la fin | `generer(2000, seed=3)` |
+
+Exemple chiffré avec la porte fixe. Le seuil choisi sur la validation (0,171) donne 0,6535 sur le test. Le seuil choisi directement sur le test (0,186) affiche 0,6605, ce qui a l'air meilleur. Mais sur 2 000 pièces toutes nouvelles (graine 4), ce seuil fait 0,661, alors que celui de la validation fait 0,6695. Le petit gain affiché sur le test ne se retrouve pas ailleurs : c'était de l'ajustement au test, pas une vraie amélioration.
+
+Ici l'écart est petit, parce qu'on ne règle qu'un seul nombre sur 2 000 signaux. Il grandit quand on fait beaucoup de choix en regardant le test (nombre d'epochs, architecture, plusieurs essais), et on finit par se tromper soi-même sur la qualité du modèle.
+
+## Étape 4 : entraîner le CNN (`03_train_cnn.py`)
+
+Tous les entraînements tournent sur la puce graphique du Mac (MPS), 60 epochs. La référence est le modèle d'origine :
+
+| Configuration | Paramètres | Durée | Meilleure perte val | Exactitude val (même epoch) |
+|---|---|---|---|---|
+| référence : canaux (8, 16, 32, 32), noyau 9, LR 1e-3 | 15 169 | 16 s | 0,3322 | 0,864 |
+
+### Exercice 1. Nombre de canaux
+
+| Canaux | Paramètres | Durée | Meilleure perte val | Exactitude val |
+|---|---|---|---|---|
+| (4, 8, 16, 16) | 3 841 | 13 s | 0,3657 (epoch 60) | 0,842 |
+| (8, 16, 32, 32) | 15 169 | 16 s | 0,3322 | 0,864 |
+| (16, 32, 64, 64) | 60 289 | 20 s | 0,3234 (epoch 29) | 0,864 |
+
+Le petit modèle apprend lentement : il reste bloqué autour de 64 % jusqu'à l'epoch 18 environ, et sa perte de validation baisse encore à l'epoch 60. Il n'a pas fini d'apprendre, et finit un peu en dessous de la référence.
+
+Le grand modèle apprend beaucoup plus vite (84 % dès l'epoch 12), mais il plafonne au même niveau que la référence, vers 86 %. Après l'epoch 30, sa perte d'entraînement continue de baisser (jusqu'à 0,30) alors que celle de validation stagne vers 0,33 en oscillant : les paramètres en plus servent à coller à l'entraînement, pas à mieux généraliser.
+
+Quatre fois plus de paramètres ne donnent donc presque rien. Ce plafond vers 86 % ne vient pas de la taille du réseau mais des données : une partie des défauts a une amplitude plus faible que le bruit, et aucun modèle ne peut les voir.
+
+### Exercice 2. Taille du noyau
+
+| Noyau | Paramètres | Durée | Meilleure perte val | Exactitude val | Champ réceptif après 4 blocs |
+|---|---|---|---|---|---|
+| 5 | 8 481 | 12 s | 0,4022 (epoch 60) | 0,818 | 76 échantillons |
+| 9 | 15 169 | 16 s | 0,3322 | 0,864 | 136 échantillons |
+| 15 | 25 201 | 20 s | 0,2941 (epoch 57) | 0,877 | 226 échantillons |
+
+Le champ réceptif est la portion du signal d'origine qu'un neurone de la dernière couche peut voir. Il grandit avec le noyau, et chaque `MaxPool1d(2)` double le pas entre deux positions, donc la contribution des couches profondes. Avec 4 blocs, il vaut 15 × noyau + 1 échantillons.
+
+Le noyau 15 donne le meilleur résultat de tous les essais. Une période de l'impulsion fait environ 8 échantillons (fréquence 0,12 cycle par échantillon) : un filtre de 5 échantillons ne voit même pas une oscillation complète au premier bloc, alors qu'un filtre de 15 en voit près de deux. Les filtres plus larges reconnaissent mieux la forme d'un écho, et le champ réceptif de 226 échantillons permet aux dernières couches de voir un écho avec son contexte.
+
+### Exercice 3. Taux d'apprentissage
+
+| LR | Meilleure perte val | Exactitude val à l'epoch 60 | Comportement |
+|---|---|---|---|
+| 1e-2 | 0,6931 | 0,501 | ne bouge pas de 0,693 pendant 60 epochs |
+| 1e-3 (référence) | 0,3322 | 0,864 | apprend normalement |
+| 1e-4 | 0,5753 (epoch 60) | 0,698 | apprend, mais très lentement |
+
+Avec 1e-2, la perte reste collée à ln 2 = 0,693 et l'exactitude à 50 % : le réseau répond au hasard du début à la fin. Les pas sont trop grands, les premières mises à jour envoient les poids dans une zone où le réseau ne réagit plus (par exemple des neurones ReLU qui sortent toujours 0), et il ne s'en remet pas.
+
+Avec 1e-4, les pas sont si petits qu'au bout de 60 epochs le réseau n'a fait qu'une partie du chemin : 70 %, et la perte baisse encore. Il faudrait beaucoup plus d'epochs.
+
+C'est l'image de la montagne de l'étape 0 : des pas trop longs font sauter par-dessus la vallée, des pas trop courts font avancer trop lentement.
+
+### Exercice 4. Observer le surapprentissage
+
+Avec 300 signaux d'entraînement et 100 epochs, j'observe bien que la perte d'entraînement continue de baisser pendant que celle de validation remonte. Le réseau apprend par cœur les 300 signaux au lieu d'apprendre ce qui distingue un défaut.
+
+### Exercice 5. Un cinquième bloc de convolution
+
+Essai fait avec le noyau 15 que j'ai gardé, donc avec `canaux=(8, 16, 32, 32, 32)` et `noyau=15`. La bonne comparaison est le modèle à 4 blocs avec le même noyau :
+
+| Blocs (noyau 15) | Paramètres | Durée | Meilleure perte val | Exactitude val | Champ réceptif |
+|---|---|---|---|---|---|
+| 4 | 25 201 | 20 s | 0,2941 (epoch 57) | 0,877 | 226 échantillons |
+| 5 | 40 593 | 23 s | 0,2728 (epoch 38) | 0,883 | 466 échantillons |
+
+Ma première conclusion était que ça n'aide pas, parce que la courbe de validation passe au-dessus de celle d'entraînement. Ce critère n'est pas le bon : une perte de validation un peu au-dessus de celle d'entraînement est normale. Le surapprentissage se voit quand la perte d'entraînement continue de baisser pendant que celle de validation remonte, ou quand l'écart entre les deux se creuse.
+
+C'est ce qui se passe ici, mais seulement après l'epoch 30 environ : la perte d'entraînement descend de 0,27 à 0,23 pendant que celle de validation stagne puis remonte légèrement, de 0,27 à 0,29. Le réseau commence à apprendre par cœur. Comme le script garde le meilleur modèle selon la validation (epoch 38), ce début de surapprentissage ne pénalise pas le modèle sauvegardé.
+
+Le cinquième bloc aide un peu : la meilleure perte de validation passe de 0,2941 à 0,2728, et le modèle apprend beaucoup plus vite (86,7 % dès l'epoch 7). Le gain en exactitude reste faible, 0,6 point, soit une douzaine de signaux sur 2 000. Avec ce bloc, le champ réceptif passe à 466 échantillons et couvre presque tout le signal utile après la zone morte : la dernière couche peut relier un écho de défaut à l'écho de fond. Le coût, c'est 15 000 paramètres de plus et un surapprentissage plus précoce.
+
+### Exercice 6. Maximum global au lieu de la moyenne
+
+Ma prédiction : le maximum allait prendre l'écho d'entrée, la plus grande valeur du signal. Elle était fausse : la normalisation met les 100 premiers échantillons à zéro (zone morte), donc l'écho d'entrée a disparu avant même d'arriver au réseau. Le plus grand écho qui reste est l'écho de fond, présent dans tous les signaux.
+
+Résultat avec `x.amax(dim=-1)` : meilleure perte de validation 0,3766 (epoch 51), exactitude 0,831, contre 0,3322 et 0,864 avec la moyenne. C'est moins bien, et la validation est plus instable (des creux à 0,79 aux epochs 43 et 47).
+
+Pour chaque canal, le maximum ne garde que la plus forte réponse du filtre sur tout le signal. Un filtre qui réagit à la forme d'un écho réagit aussi, et plus fort, à l'écho de fond, sain ou pas. Le maximum garde donc souvent la réponse à l'écho de fond et jette celle au petit défaut. La moyenne conserve un peu de tout le signal, y compris le petit écho supplémentaire et l'affaiblissement de l'écho de fond causé par le défaut.

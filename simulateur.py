@@ -104,3 +104,16 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig("sorties/exemples_signaux.png", dpi=110)
     print("Image écrite : sorties/exemples_signaux.png")
+
+    # --- Exercice 2 : 20 signaux sains normalisés, superposés ---
+    Xs, ys = generer(20, taux_defaut=0.0, seed=7)  # 20 signaux, aucun défaut
+    Xs = normaliser(Xs)  # même traitement que pour le réseau
+    plt.figure(figsize=(11, 4))
+    for s in Xs:  # un tracé par signal, sur le même graphique
+        plt.plot(s, lw=0.6, alpha=0.5)
+    plt.title("20 signaux sains normalisés, superposés")
+    plt.xlabel("temps (échantillons)")
+    plt.ylabel("amplitude normalisée")
+    plt.tight_layout()
+    plt.savefig("sorties/signaux_sains_superposes.png", dpi=110)
+    print("Image écrite : sorties/signaux_sains_superposes.png")
