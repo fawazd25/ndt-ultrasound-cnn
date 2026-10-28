@@ -527,3 +527,16 @@ Oui, on récupère la performance, et très vite. À 50 % et 70 %, trois epochs 
 L'élagage seul abîme le modèle parce qu'il supprime des poids sans que les autres aient l'occasion de compenser. Le réentraînement donne cette occasion. Ces poids à zéro ne rendent toujours pas le calcul plus rapide, mais un modèle élagué à 70 % puis réentraîné pourrait être compressé efficacement, ou combiné à de l'élagage structuré (retirer des filtres entiers) pour vraiment gagner en vitesse.
 
 Le réentraînement s'est fait sans augmentation de données, et les modèles réentraînés ne sont pas sauvegardés : c'est une expérience, pas un changement du modèle de référence.
+
+### Exercice 4. Le rappel après quantification
+
+J'ai ajouté au tableau de quantification le rappel au seuil 0,5 et au seuil d'inspection choisi à l'étape 5 (0,15, lu dans `sorties/seuil.json`), ainsi que le nombre de défauts ratés à ce seuil.
+
+| Modèle | Exactitude | Rappel à 0,5 | Rappel à 0,15 | Défauts ratés (sur 1 008) |
+|---|---|---|---|---|
+| float32 | 0,893 | 0,833 | 0,970 | 30 |
+| int8 | 0,892 | 0,840 | 0,973 | 27 |
+
+La quantification ne fait pas perdre de rappel : le modèle int8 rate même 3 défauts de moins au seuil d'inspection. L'écart est trop petit pour parler d'amélioration (3 signaux sur 1 008) ; il vient des arrondis, qui décalent légèrement les probabilités. Comme l'exactitude baisse d'un signal, le modèle int8 fait probablement un peu plus de fausses alarmes en échange.
+
+Oui, le rappel est plus important ici que l'exactitude. Un défaut raté laisse partir une pièce défectueuse, alors qu'une fausse alarme ne coûte qu'un contrôle de plus. L'exactitude mélange les deux erreurs : une quantification pourrait faire rater plusieurs défauts de plus tout en évitant autant de fausses alarmes, sans que l'exactitude bouge. Il faut aussi mesurer le rappel au seuil d'inspection, pas seulement à 0,5 : c'est près de ce seuil bas que se trouvent les défauts difficiles, ceux qu'un petit décalage de probabilité peut faire basculer. Avant d'embarquer un modèle quantifié dans un appareil, c'est cette vérification qui compte.

@@ -1,5 +1,5 @@
 """Optimisation : élagage (pruning) et quantification INT8. On mesure précision, taille, vitesse."""
-import os, time, copy
+import os, time, copy, json
 import numpy as np
 import torch
 import torch.nn.utils.prune as prune
@@ -81,6 +81,11 @@ def evaluer_onnx(chemin):
     X = Xte.reshape(-1, 1, 512)
     sortie = sess.run(None, {"signal": X})[0]
     exact = ((sortie > 0) == yte).mean()
+    # rappel (étape 8, exercice 4) : au seuil 0,5, et au seuil d'inspection choisi à l'étape 5
+    proba = 1 / (1 + np.exp(-sortie))
+    rappel_05 = (proba[yte == 1] >= 0.5).mean()
+    rappel_seuil = (proba[yte == 1] >= SEUIL).mean()
+    rates = int((proba[yte == 1] < SEUIL).sum())
     # latence : un signal à la fois, médiane sur 300 appels
     un = X[:1]
     for _ in range(30):
@@ -88,14 +93,16 @@ def evaluer_onnx(chemin):
     t = []
     for _ in range(300):
         t0 = time.perf_counter(); sess.run(None, {"signal": un}); t.append(time.perf_counter() - t0)
-    return exact, np.median(t) * 1000, os.path.getsize(chemin) / 1024
+    return exact, np.median(t) * 1000, os.path.getsize(chemin) / 1024, rappel_05, rappel_seuil, rates
 
 
+SEUIL = json.load(open("sorties/seuil.json"))["seuil"]   # seuil d'inspection choisi à l'étape 5
 print("== Quantification INT8 (ONNX Runtime) ==")
-print(f"{'modèle':<10}{'exactitude':>12}{'latence (ms)':>15}{'taille (Ko)':>13}")
+print(f"{'modèle':<10}{'exactitude':>12}{'latence (ms)':>15}{'taille (Ko)':>13}"
+      f"{'rappel 0.5':>12}{f'rappel {SEUIL}':>13}{'ratés':>8}")
 for nom, chemin in [("float32", "sorties/cnn.onnx"), ("int8", "sorties/cnn_int8.onnx")]:
-    e, l, s = evaluer_onnx(chemin)
-    print(f"{nom:<10}{e:>12.3f}{l:>15.3f}{s:>13.1f}")
+    e, l, s, r05, rs, rates = evaluer_onnx(chemin)
+    print(f"{nom:<10}{e:>12.3f}{l:>15.3f}{s:>13.1f}{r05:>12.3f}{rs:>13.3f}{rates:>8d}")
 
 
 # ---------- 3) Latence selon la taille du lot (étape 8, exercice 2) -------------

@@ -424,6 +424,8 @@ Avec mon modèle, la quantification est presque gratuite : 0,1 point d'exactitud
 
 L'élagage m'a surpris : mon modèle garde 88,5 % avec 30 % des poids supprimés, là où celui du guide s'effondre à 60 %. Un réseau plus gros a plus de redondance, donc il supporte mieux qu'on lui retire des poids. Ça donne un autre éclairage à mon choix de 5 blocs : les paramètres en plus n'apportaient presque rien en exactitude, mais ils rendent le modèle plus tolérant à la compression.
 
+En réentraînant 3 epochs après l'élagage, le modèle récupère tout son niveau même avec 70 % des poids supprimés : les poids restants compensent ceux qui manquent. Et la quantification ne coûte rien en rappel au seuil d'inspection (27 défauts ratés en int8 contre 30 en float32). J'ai retenu qu'après toute compression, il faut vérifier la métrique qui compte pour le métier, ici le rappel au seuil choisi, et pas seulement l'exactitude, qui peut cacher un échange entre défauts ratés et fausses alarmes.
+
 ### Latence ou débit : traiter les signaux un par un ou par lots
 
 En mesurant la latence par lots de 1, 16 et 128 signaux, j'ai vu que regrouper les signaux divise le temps par signal par trois. Chaque appel au modèle a un coût fixe, partagé entre tous les signaux du lot. Il faut donc distinguer deux besoins : la latence (le temps pour obtenir une réponse sur un signal précis, important si l'appareil doit réagir tout de suite) et le débit (le nombre de signaux traités par seconde, important pour analyser un balayage complet). On n'optimise pas de la même façon pour l'un et pour l'autre, et l'avantage de la quantification n'est pas le même : deux fois plus rapide pour un signal seul, seulement 20 % de mieux sur un gros lot.
