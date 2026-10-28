@@ -1,4 +1,5 @@
 """Le modèle tient-il quand les conditions changent ? (pont avec la cybersécurité)"""
+import os, sys
 import numpy as np
 import torch, torch.nn as nn
 import matplotlib
@@ -9,7 +10,11 @@ from modele import CNN1D
 
 _, _, (Xte, yte) = jeux_standard()
 modele = CNN1D()
-modele.load_state_dict(torch.load("sorties/cnn_meilleur.pt"))
+# Modèle à tester : sorties/cnn_meilleur.pt par défaut, ou un autre fichier passé en argument,
+# par exemple : python 05_robustesse.py sorties/cnn_sans_augmentation.pt
+CHEMIN = sys.argv[1] if len(sys.argv) > 1 else "sorties/cnn_meilleur.pt"
+modele.load_state_dict(torch.load(CHEMIN))
+print(f"Modèle testé : {CHEMIN}")
 modele.eval()
 rng = np.random.default_rng(0)
 
@@ -54,9 +59,24 @@ for eps in [0.01, 0.02, 0.05, 0.1]:
     r = evaluer(xa); res_fgsm.append(r[0])
     print(f"{'attaque adverse eps=' + str(eps):<32}{r[0]:>11.3f}{r[1]:>9.3f}")
 
+# 5) Même attaque, mais la zone morte reste à zéro (exercice 2 de l'étape 6).
+#    Dans une vraie chaîne, la normalisation remet ces 100 premiers échantillons à zéro :
+#    une perturbation placée là serait effacée avant d'atteindre le modèle.
+direction_zm = direction.clone()
+direction_zm[:, :, :ZONE_MORTE] = 0
+res_fgsm_zm = []
+for eps in [0.01, 0.02, 0.05, 0.1]:
+    xa = (x.detach() + eps * direction_zm).squeeze(1).numpy()
+    r = evaluer(xa); res_fgsm_zm.append(r[0])
+    print(f"{'attaque zone morte à 0 eps=' + str(eps):<32}{r[0]:>11.3f}{r[1]:>9.3f}")
+
 fig, ax = plt.subplots(figsize=(6, 3.5))
 ax.plot([0.02, 0.05, 0.1, 0.2], res_bruit, "o-", label="bruit aléatoire")
 ax.plot([0.01, 0.02, 0.05, 0.1], res_fgsm, "s-", label="attaque adverse (FGSM)")
+ax.plot([0.01, 0.02, 0.05, 0.1], res_fgsm_zm, "^--", label="FGSM, zone morte à 0")
 ax.axhline(ref[0], ls="--", c="gray"); ax.set_xlabel("amplitude de la perturbation")
 ax.set_ylabel("exactitude"); ax.legend(); plt.tight_layout()
-plt.savefig("sorties/robustesse.png", dpi=110)
+nom = os.path.splitext(os.path.basename(CHEMIN))[0]
+image = "sorties/robustesse.png" if nom == "cnn_meilleur" else f"sorties/robustesse_{nom}.png"
+plt.savefig(image, dpi=110)
+print(f"Image écrite : {image}")

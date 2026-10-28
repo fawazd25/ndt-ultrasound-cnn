@@ -17,6 +17,17 @@ np.random.seed(0)
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 LR, BATCH = 1e-3, 64
 
+# Augmentation de données (étape 6) : à chaque mini-lot, on perturbe les signaux d'entraînement
+# avec un gain et un bruit tirés au hasard, pour que le modèle apprenne à les ignorer.
+AUGMENTER = True
+GAIN_MIN, GAIN_MAX = 0.7, 1.3      # erreur d'étalonnage simulée : ±30 % sur l'amplitude
+BRUIT_MAX = 0.1                    # écart-type du bruit ajouté, tiré entre 0 et BRUIT_MAX
+
+# Entraînement adverse (étape 6, exercice 3) : on ajoute à chaque mini-lot sa version attaquée
+# par FGSM, calculée avec le modèle du moment, pour que le réseau apprenne à y résister.
+ADVERSAIRE = False                 # essai fait à l'étape 6 : voir reponses_exercices.md
+EPS_ADV = 0.02                     # taille de l'attaque utilisée pendant l'entraînement
+
 (Xtr, ytr), (Xva, yva), _ = jeux_standard()
 tens = lambda X, y: (torch.from_numpy(X).unsqueeze(1), torch.from_numpy(y).float())
 Xtr_t, ytr_t = tens(Xtr, ytr)
@@ -40,7 +51,21 @@ for ep in range(1, EPOCHS + 1):
     for i in range(0, len(ordre), BATCH):
         idx = ordre[i:i + BATCH]
         opt.zero_grad()
-        l = perte(modele(Xtr_t[idx]), ytr_t[idx])
+        xb = Xtr_t[idx]
+        if AUGMENTER:
+            n = len(idx)
+            gain = torch.empty(n, 1, 1, device=device).uniform_(GAIN_MIN, GAIN_MAX)   # un gain par signal
+            ecart = torch.empty(n, 1, 1, device=device).uniform_(0, BRUIT_MAX)       # un niveau de bruit par signal
+            xb = xb * gain + ecart * torch.randn_like(xb)
+        yb = ytr_t[idx]
+        if ADVERSAIRE:
+            xa = xb.detach().clone().requires_grad_(True)
+            perte(modele(xa), yb).backward()            # gradient de la perte par rapport à l'ENTRÉE
+            xa = (xa + EPS_ADV * xa.grad.sign()).detach() # version attaquée de chaque signal
+            opt.zero_grad()                              # on jette les gradients des poids calculés pour l'attaque
+            xb = torch.cat([xb, xa])                     # le lot contient les signaux normaux ET attaqués
+            yb = torch.cat([yb, yb])                     # avec les mêmes étiquettes
+        l = perte(modele(xb), yb)
         l.backward()
         opt.step()
         tot += l.item() * len(idx)

@@ -46,21 +46,35 @@ Ce choix vient d'essais comparés sur le jeu de **validation**, en changeant un 
 
 Chaque configuration n'a été entraînée qu'une fois : les petits écarts sont du même ordre que la variation d'un entraînement à l'autre.
 
+Le modèle est entraîné avec une augmentation de données : à chaque mini-lot, les signaux reçoivent un gain aléatoire (0,7 à 1,3) et un bruit gaussien aléatoire (écart-type jusqu'à 0,1). Un entraînement adverse (FGSM, ε = 0,02) a aussi été essayé, puis écarté : il triple presque la résistance à l'attaque à ε = 0,02 mais fait perdre 9 points de rappel sur les signaux normaux (détails dans `reponses_exercices.md`, étape 6).
+
 ## Résultats sur le jeu de test simulé
 
 | Méthode | Exactitude | AUC |
 |---|---|---|
 | Porte fixe avec seuil (méthode classique) | 0,65 | 0,70 |
 | Régression logistique sur le signal brut | 0,51 | 0,50 |
-| CNN 1D retenu (5 blocs, noyau 15), seuil 0,5 | 0,89 (IC 95 % : 0,88 à 0,91) | 0,96 |
+| CNN 1D retenu (5 blocs, noyau 15, augmentation), seuil 0,5 | 0,89 (IC 95 % : 0,88 à 0,91) | 0,96 |
 
 L'intervalle de confiance de l'exactitude est obtenu par bootstrap (1 000 tirages avec remise des 2 000 signaux de test) : environ ±1,4 point.
 
-Le seuil de 0,5 rate 147 défauts sur 1 008. Pour une inspection, le seuil retenu est choisi sur la validation pour garantir un rappel d'au moins 95 % : à 0,14, le modèle rate 38 défauts sur 1 008 (rappel 0,962), au prix de 39 % de fausses alarmes (précision 0,713).
+Le seuil de 0,5 rate 168 défauts sur 1 008. Pour une inspection, le seuil retenu est choisi sur la validation pour garantir un rappel d'au moins 95 % : à 0,15, le modèle rate 30 défauts sur 1 008 (rappel 0,970), au prix de 38 % de fausses alarmes (précision 0,721).
 
-Ces chiffres supposent une pièce défectueuse sur deux. Avec 1 % de pièces défectueuses, comme en production, seule une alarme sur 40 environ serait justifiée au seuil 0,14 (précision d'environ 2,4 %).
+Ces chiffres supposent une pièce défectueuse sur deux. Avec 1 % de pièces défectueuses, comme en production, seule une alarme sur 40 environ serait justifiée au seuil 0,15 (précision d'environ 2,5 %).
 
 La porte fixe surveille une fenêtre de temps fixe : elle rate les défauts profonds et ne peut pas s'étendre sans attraper l'écho de fond, qui change de place d'une pièce à l'autre. La régression logistique donne un poids fixe à chaque position du signal et ne sait pas reconnaître un écho « quelque part » : elle fait le hasard.
+
+## Robustesse
+
+| Perturbation | Sans augmentation | Avec augmentation (retenu) |
+|---|---|---|
+| aucune | 0,892 | 0,893 |
+| bruit +0,1 | 0,716 | 0,736 |
+| amplitude ×0,7 (mauvais étalonnage) | 0,844 | 0,890 |
+| décalage de 15 échantillons | 0,887 | 0,888 |
+| attaque adverse FGSM, ε = 0,02 | 0,372 | 0,435 |
+
+L'augmentation rend le modèle presque insensible à une erreur d'étalonnage de 30 %, sans rien coûter sur les signaux normaux. Il reste très fragile face à une attaque adverse : une perturbation de 2 %, invisible à l'œil, le fait tomber sous le hasard, même en respectant la zone morte effacée par la normalisation. Le raisonnement de menace (qui pourrait attaquer, où, avec quel accès) est dans `journal.md`.
 
 ## Documentation du travail
 

@@ -329,3 +329,96 @@ Conséquence pour mes choix de l'étape 4 : l'écart d'exactitude entre les mod�
 Ma réponse : on le fait pour ne pas être trop optimiste quant à la capacité du modèle à bien fonctionner.
 
 Version plus précise : si on choisissait le seuil sur le test, il s'ajusterait à ces signaux-là, et le score du test, devenu trop optimiste, ne dirait plus comment le modèle se comportera sur des pièces nouvelles (voir l'exercice 3 de l'étape 3).
+
+## Étape 6 : la robustesse (`05_robustesse.py`)
+
+### Exercice 1. Augmentation de données
+
+Dans `03_train_cnn.py`, chaque mini-lot d'entraînement reçoit maintenant, avant la passe avant, un gain tiré entre 0,7 et 1,3 et un bruit gaussien d'écart-type tiré entre 0 et 0,1, différents pour chaque signal. La validation n'est pas augmentée. J'ai gardé le modèle d'avant dans `sorties/cnn_sans_augmentation.pt`, et `05_robustesse.py` prend maintenant le modèle à tester en argument, pour comparer les deux sans les mélanger.
+
+| Perturbation | Sans augmentation | Avec augmentation | Écart |
+|---|---|---|---|
+| aucune | 0,892 | 0,893 | +0,1 |
+| bruit +0,02 | 0,882 | 0,881 | −0,1 |
+| bruit +0,05 | 0,845 | 0,851 | +0,6 |
+| bruit +0,1 | 0,716 | 0,736 | +2,0 |
+| bruit +0,2 | 0,562 | 0,579 | +1,7 |
+| amplitude ×0,7 | 0,844 | 0,890 | +4,6 |
+| amplitude ×1,3 | 0,884 | 0,896 | +1,2 |
+| décalage −15 | 0,871 | 0,868 | −0,3 |
+| décalage +15 | 0,887 | 0,888 | +0,1 |
+| attaque ε = 0,01 | 0,600 | 0,652 | +5,2 |
+| attaque ε = 0,02 | 0,372 | 0,435 | +6,3 |
+| attaque ε = 0,05 | 0,233 | 0,270 | +3,7 |
+| attaque ε = 0,1 | 0,289 | 0,290 | +0,1 |
+
+(Exactitude sur les 2 000 signaux de test ; l'écart est en points. L'intervalle de confiance de l'étape 5 est d'environ ±1,4 point.)
+
+![Robustesse avec augmentation](sorties/robustesse.png)
+
+Sans perturbation, le modèle augmenté fait aussi bien que l'ancien : l'augmentation ne coûte rien sur les signaux normaux.
+
+Le gain le plus net concerne l'étalonnage : avec une amplitude réduite de 30 %, l'exactitude passe de 0,844 à 0,890, presque le niveau sans perturbation. Le modèle a vu des gains entre 0,7 et 1,3 pendant l'entraînement et a appris à ne pas en dépendre.
+
+Pour le bruit, le gain est réel mais modeste : +2 points à 0,1 et +1,7 à 0,2, juste au-dessus de la marge d'incertitude. À 0,2, au-delà de ce que le modèle a vu à l'entraînement (0,1 au plus), il reste proche du hasard, et son rappel de 0,935 montre qu'il déclare presque tout défectueux. Le décalage ne change pas : le modèle y était déjà peu sensible grâce aux convolutions.
+
+Résultat inattendu : l'augmentation améliore aussi un peu la résistance à l'attaque adverse (+5 à +6 points pour ε = 0,01 et 0,02), alors qu'elle n'a pas été conçue pour ça. Un modèle habitué au bruit réagit un peu moins violemment à de petites perturbations de l'entrée. Il reste quand même très fragile : à ε = 0,02, invisible à l'œil, il tombe à 43,5 %, moins bien que le hasard.
+
+Pendant l'entraînement, la perte d'entraînement (vers 0,37) reste maintenant au-dessus de celle de validation (vers 0,27). Ce n'est pas un problème : les signaux d'entraînement sont rendus plus difficiles par l'augmentation, alors que la validation reste propre.
+
+Je garde le modèle augmenté pour la suite du projet.
+
+Avec le modèle augmenté, `04_evaluation.py` donne : AUC 0,958, exactitude 0,893 [0,878 ; 0,905], et un nouveau seuil de 0,15 pour un rappel d'au moins 95 %. À ce seuil, le modèle rate 30 défauts sur 1 008 au lieu de 38, avec un peu moins de fausses alarmes (38,2 % au lieu de 39,4 %). À seuil 0,5, il rate un peu plus de défauts (168 au lieu de 147) mais fait moins de fausses alarmes (4,6 % au lieu de 6,9 %) : c'est le seuil choisi qui compte, et à ce seuil le modèle augmenté est meilleur.
+
+### Exercice 2. L'attaque en gardant la zone morte à zéro
+
+J'ai ajouté à `05_robustesse.py` une deuxième version de l'attaque FGSM : même direction, mais avec les 100 premiers échantillons remis à zéro, comme le fait la normalisation. Modèle testé : le modèle augmenté.
+
+| ε | Attaque d'origine | Zone morte à zéro | Écart |
+|---|---|---|---|
+| 0,01 | 0,652 | 0,667 | +1,5 |
+| 0,02 | 0,435 | 0,447 | +1,2 |
+| 0,05 | 0,270 | 0,272 | +0,2 |
+| 0,1 | 0,290 | 0,334 | +4,4 |
+
+Ça ne change presque rien. Jusqu'à ε = 0,05, les écarts restent dans la marge d'incertitude (±1,4 point) : l'attaque garde toute son efficacité sans toucher à la zone morte. Elle passe donc par la partie du signal qui survit au prétraitement, et un attaquant n'a pas besoin de cette zone. L'attaque d'origine n'était pas irréaliste sur ce point : la menace est réelle.
+
+Seul l'écart à ε = 0,1 dépasse la marge (+4,4 points). À cette amplitude, l'attaque d'origine est d'ailleurs moins efficace qu'à ε = 0,05 (0,290 contre 0,270). FGSM fait un seul pas dans la direction du gradient calculé au point de départ ; quand ce pas devient grand, cette direction ne décrit plus bien le modèle, et l'attaque perd en efficacité. Les différences entre les deux versions à ε = 0,1 tiennent probablement à cet effet plus qu'à la zone morte elle-même.
+
+![Robustesse avec les deux versions de l'attaque](sorties/robustesse.png)
+
+### Exercice 3. L'entraînement adverse (adversarial training)
+
+En trois phrases : pendant l'entraînement, on fabrique à chaque étape des versions attaquées des signaux du lot (par exemple avec FGSM), calculées avec le modèle tel qu'il est à ce moment-là. On entraîne le modèle sur ces signaux attaqués, avec leur vraie étiquette, en plus des signaux normaux. Il apprend ainsi à donner la même réponse pour un signal et pour sa version légèrement perturbée, ce qui rend les petites perturbations ciblées beaucoup moins efficaces.
+
+Implémentation dans `03_train_cnn.py` (réglages `ADVERSAIRE = True` et `EPS_ADV = 0.02`) : pour chaque mini-lot, on calcule le gradient de la perte par rapport à l'entrée, on en déduit la version attaquée des signaux, on jette les gradients des poids calculés pour l'attaque, puis on entraîne sur le lot normal et le lot attaqué réunis. Le modèle précédent (augmenté, sans entraînement adverse) est gardé dans `sorties/cnn_augmente.pt`.
+
+Le modèle entraîné de façon adverse est gardé dans `sorties/cnn_adversaire.pt`. L'entraînement a pris 53 secondes au lieu de 23.
+
+| Perturbation | Augmenté | Augmenté + adverse | Écart |
+|---|---|---|---|
+| aucune (exactitude) | 0,893 | 0,861 | −3,2 |
+| aucune (rappel) | 0,833 | 0,741 | −9,2 |
+| bruit +0,05 | 0,851 | 0,823 | −2,8 |
+| bruit +0,1 | 0,736 | 0,733 | −0,3 |
+| amplitude ×0,7 | 0,890 | 0,841 | −4,9 |
+| attaque ε = 0,01 | 0,652 | 0,783 | +13,1 |
+| attaque ε = 0,02 | 0,435 | 0,704 | +26,9 |
+| attaque ε = 0,05 | 0,270 | 0,477 | +20,7 |
+| attaque ε = 0,1 | 0,290 | 0,328 | +3,8 |
+
+![Robustesse du modèle entraîné de façon adverse](sorties/robustesse_cnn_adversaire.png)
+
+La défense marche contre l'attaque qu'il a vue à l'entraînement : à ε = 0,02, l'exactitude passe de 43,5 % à 70,4 %. Elle aide encore à ε = 0,05, mais le modèle y reste sous le hasard (47,7 %), et elle ne protège presque plus à ε = 0,1, au-delà de ce qu'il a appris.
+
+Le prix est lourd. Sur les signaux normaux, l'exactitude baisse de 3,2 points et surtout le rappel de 9,2 points : à seuil 0,5, le modèle rate beaucoup plus de défauts. La résistance au bruit et à l'erreur d'étalonnage se dégrade aussi. La meilleure perte de validation passe de 0,264 à 0,337.
+
+Deux réserves. Le modèle est évalué avec la même attaque (FGSM) que celle qui a servi à l'entraîner, ce qui peut surestimer la protection ; une attaque plus forte comme PGD serait le vrai test. Et les deux versions de l'attaque (avec ou sans zone morte) donnent maintenant exactement les mêmes chiffres : le modèle semble avoir appris à ignorer complètement la zone morte.
+
+Décision : pour une inspection, rater des défauts coûte plus cher qu'être vulnérable à une attaque dont la menace reste à démontrer (exercice 4). Je garde le modèle augmenté sans entraînement adverse pour la suite (`ADVERSAIRE = False`). L'entraînement adverse reste une option documentée si l'analyse de menace la justifie.
+
+### Exercice 4. Raisonnement de menace
+
+Le raisonnement complet (qui, où, accès nécessaire, défenses) est dans `journal.md`, section « Raisonnement de menace : qui pourrait attaquer un signal d'inspection ? ».
+
+En résumé : les attaquants les plus crédibles ne sont pas des concurrents, mais ceux qui ont intérêt à faire passer des pièces défectueuses et un accès à la chaîne (fournisseur ou sous-traitant fraudeur, employé malveillant, acteur étatique visant une infrastructure critique). La condition principale est de pouvoir modifier le signal numérique entre l'appareil et le modèle, et de connaître le modèle ou d'en avoir une copie approchée. Les défenses les plus efficaces sont l'intégrité des données (signature, chiffrement), le contrôle d'accès et la journalisation, avant l'entraînement adverse.

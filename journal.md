@@ -354,6 +354,60 @@ Mon exactitude sur le test vaut 0,892, mais elle est mesurée sur un seul échan
 
 Ça change la façon de lire mes comparaisons de l'étape 4. Un écart de 0,6 point entre deux modèles est plus petit que l'incertitude : il pourrait venir du hasard. Pour comparer deux modèles sérieusement, il faut que l'écart dépasse nettement cette marge, ou répéter les entraînements avec plusieurs graines. Je présenterai désormais mes résultats sous la forme « 89,2 % ± 1,4 point » plutôt qu'avec un seul chiffre.
 
+### L'augmentation de données, et une erreur d'étiquetage
+
+L'augmentation de données consiste à perturber les signaux d'entraînement au hasard (ici un gain entre 0,7 et 1,3 et un peu de bruit) pour que le modèle apprenne à ne pas dépendre de ces variations. Résultat : aucune perte sur les signaux normaux, une forte amélioration face à une erreur d'étalonnage de 30 % (de 84 % à 89 %), un gain modeste face au bruit, et, sans l'avoir cherché, un peu plus de résistance à l'attaque adverse. Le modèle augmenté devient le modèle de référence.
+
+J'ai d'abord envoyé mes deux sorties avec les étiquettes « avant » et « après » inversées. L'erreur a été repérée parce que le modèle sans augmentation devait redonner exactement les chiffres de l'étape 5 (0,892 et 0,854), et c'était la sortie « après » qui les affichait. Depuis, `05_robustesse.py` affiche en première ligne le fichier du modèle testé. Une leçon pratique : chaque résultat doit dire de quoi il est le résultat, et un chiffre déjà connu sert de point de contrôle.
+
+L'augmentation a été réglée d'après les perturbations que le script teste ensuite (gain ±30 %, bruit jusqu'à 0,1). C'est un peu préparer le modèle à l'examen. Dans un vrai projet, on choisirait ces plages d'après ce qui arrive réellement sur le terrain.
+
+### Ce projet relève de quel métier ?
+
+Surtout du ML engineering : je construis un modèle de A à Z sur des données de capteur (signaux), je le compare à des méthodes de référence, je l'évalue honnêtement, je teste sa robustesse, puis je l'optimise et je le déploie (ONNX, quantification, C++, API). L'AI engineering, au sens où on l'emploie aujourd'hui, consiste plutôt à construire des applications au-dessus de grands modèles existants (LLM, RAG, agents), sans entraîner de réseau soi-même. Ce projet n'en fait pas.
+
+Il touche aussi deux spécialités voisines. L'étape 6 relève de la sécurité des modèles (adversarial ML), qui rejoint ma formation en cybersécurité. Les étapes 8 et 9 (quantification, inférence en C++) relèvent de l'IA embarquée, qui compte beaucoup dans l'industrie, où les modèles tournent souvent sur des appareils plutôt que dans le cloud. Les bases que je travaille en parallèle (gradient, règle de la chaîne, rétropropagation) servent à tous ces métiers.
+
+### Une attaque doit survivre à toute la chaîne de traitement
+
+L'attaque FGSM d'origine modifiait tout le signal, y compris la zone morte que la normalisation remet à zéro. Dans un vrai système, cette partie de la perturbation serait effacée avant d'arriver au modèle. En la retirant, l'attaque reste aussi efficace (écarts de 0,2 à 1,5 point jusqu'à ε = 0,05). Elle passe donc entièrement par la partie utile du signal : la menace n'était pas un artefact du test. En sécurité des modèles, la bonne question n'est pas seulement « l'attaque marche-t-elle ? » mais « marche-t-elle encore après tous les traitements qu'un vrai attaquant devrait traverser ? ».
+
+### L'entraînement adverse : une défense qui se paie
+
+L'entraînement adverse consiste à entraîner le modèle sur des versions attaquées de ses propres signaux, recalculées à chaque étape. Ça marche contre l'attaque apprise : à ε = 0,02, mon modèle passe de 43,5 % à 70,4 %. Mais il perd 9 points de rappel sur les signaux normaux et devient moins robuste au bruit et à l'étalonnage. Il n'existe pas de robustesse gratuite : se protéger contre une menace peut affaiblir le modèle face aux autres, et surtout sur sa tâche principale.
+
+Le choix dépend donc de la menace réelle. Pour une inspection, un défaut raté est le risque principal ; une attaque adverse suppose un attaquant capable de modifier le signal, ce qu'il faut d'abord démontrer. J'ai gardé le modèle sans entraînement adverse, en documentant l'essai.
+
+J'ai aussi retenu une réserve de méthode : tester un modèle avec la même attaque que celle qui a servi à l'entraîner surestime la protection. Il faudrait une attaque différente et plus forte (PGD, plusieurs petits pas) pour conclure.
+
+### Raisonnement de menace : qui pourrait attaquer un signal d'inspection ?
+
+Ma première idée était un concurrent. C'est possible, mais peu probable : un concurrent a rarement accès à la chaîne d'inspection d'une autre entreprise, et il aurait plus simple à faire pour lui nuire. En reprenant la question par « qui a intérêt à ce qu'une pièce défectueuse passe ? », je vois d'autres profils, plus crédibles.
+
+Qui :
+
+- Un fournisseur qui produit les pièces, ou un sous-traitant chargé de les inspecter. S'il doit livrer à temps ou à un certain taux de conformité, faire passer des pièces défectueuses lui fait gagner de l'argent. La fraude à la qualité et les pièces non conformes sont des problèmes réels dans l'aéronautique.
+- Un employé malveillant ou mécontent, qui a déjà un accès légitime aux appareils ou aux serveurs.
+- Un acteur étatique ou un groupe organisé qui veut saboter une infrastructure critique (aviation, nucléaire, ponts, pipelines) en laissant passer des défauts qui céderont plus tard.
+- À l'inverse, quelqu'un qui veut faire rejeter des pièces saines (fausses alarmes) pour bloquer une production : là, un concurrent devient plus plausible.
+
+Où l'attaque peut se placer, de la sonde au modèle :
+
+1. Sur le signal physique, à la sonde : très difficile, il faudrait produire une perturbation acoustique précise dans la pièce.
+2. Dans l'appareil d'acquisition, par son logiciel ou son firmware : faisable pour quelqu'un qui accède à l'appareil ou à sa chaîne de mise à jour (attaque de la chaîne d'approvisionnement).
+3. Pendant la transmission, entre l'appareil et le serveur qui fait tourner le modèle, si les données ne sont ni chiffrées ni signées.
+4. À l'entrée du modèle, par exemple l'API Flask de l'étape 10, qui reçoit le signal en JSON : quiconque peut lui envoyer des requêtes peut lui soumettre un signal modifié.
+
+Ce qu'il faut à l'attaquant :
+
+- Pouvoir modifier le signal numérique après l'acquisition et avant le modèle (points 2 à 4). C'est la condition principale.
+- Connaître le modèle, au moins en partie. Mon attaque FGSM est en boîte blanche : elle utilise les poids et le gradient du modèle. Sans eux, un attaquant peut entraîner un modèle de substitution sur des données semblables et espérer que l'attaque se transfère, ou interroger l'API de nombreuses fois pour deviner la direction à suivre.
+- Savoir que la perturbation survit au prétraitement. L'exercice 2 montre que c'est le cas ici : l'attaque reste efficace même en laissant la zone morte à zéro.
+
+Ce qui rend l'attaque adverse intéressante pour un attaquant, c'est qu'elle est discrète. Quelqu'un qui peut déjà modifier le signal pourrait simplement le remplacer par celui d'une pièce saine, mais un inspecteur pourrait remarquer l'anomalie. Une perturbation de 2 % est invisible à l'œil : le signal a l'air normal et le modèle se trompe.
+
+Les défenses les plus utiles ne sont pas forcément dans le modèle : signer les signaux dès l'appareil pour détecter toute modification, chiffrer les transmissions, protéger l'accès à l'API et aux poids du modèle, journaliser chaque décision (comme le prévoit l'étape 10), et garder une revue humaine sur un échantillon de pièces. L'entraînement adverse ne vient qu'en complément, et seulement si la menace le justifie, vu son coût sur le rappel.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.
