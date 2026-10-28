@@ -247,3 +247,85 @@ Ma prédiction : le maximum allait prendre l'écho d'entrée, la plus grande val
 Résultat avec `x.amax(dim=-1)` : meilleure perte de validation 0,3766 (epoch 51), exactitude 0,831, contre 0,3322 et 0,864 avec la moyenne. C'est moins bien, et la validation est plus instable (des creux à 0,79 aux epochs 43 et 47).
 
 Pour chaque canal, le maximum ne garde que la plus forte réponse du filtre sur tout le signal. Un filtre qui réagit à la forme d'un écho réagit aussi, et plus fort, à l'écho de fond, sain ou pas. Le maximum garde donc souvent la réponse à l'écho de fond et jette celle au petit défaut. La moyenne conserve un peu de tout le signal, y compris le petit écho supplémentaire et l'affaiblissement de l'écho de fond causé par le défaut.
+
+## Étape 5 : l'évaluation (`04_evaluation.py`)
+
+Modèle évalué : 5 blocs, noyau 15. C'est la première fois que ce modèle est mesuré sur le test.
+
+```
+AUC (test) = 0.956
+Seuil standard 0.5                 seuil=0.50  rappel=0.854  précision=0.927  fausses alarmes=0.069  (défauts ratés : 147/1008)
+Seuil choisi pour rappel >= 95%    seuil=0.14  rappel=0.962  précision=0.713  fausses alarmes=0.394  (défauts ratés : 38/1008)
+```
+
+| | Guide (modèle de départ) | Mon modèle (5 blocs, noyau 15) |
+|---|---|---|
+| AUC test | 0,922 | 0,956 |
+| Défauts ratés à seuil 0,5 | 156 / 1 008 | 147 / 1 008 |
+| Fausses alarmes à seuil 0,5 | 13,4 % | 6,9 % |
+| Seuil pour un rappel d'au moins 95 % | 0,24 | 0,14 |
+| Fausses alarmes à ce seuil | 42,6 % | 39,4 % |
+
+Mon modèle fait mieux que celui du guide sur toutes les lignes. Le gain le plus net est sur les fausses alarmes à seuil 0,5, divisées par deux.
+
+![Courbe ROC et matrice de confusion](sorties/evaluation.png)
+
+### Le scénario des défauts rares
+
+Le jeu de test contient une pièce défectueuse sur deux. En production, les défauts sont rares. Avec 1 % de pièces défectueuses et mes chiffres, pour 10 000 pièces (100 défectueuses, 9 900 saines) :
+
+| Seuil | Défauts trouvés | Défauts ratés | Fausses alarmes | Précision |
+|---|---|---|---|---|
+| 0,14 (rappel ≥ 95 %) | 96 | 4 | 3 901 | 96 / 3 997 ≈ 2,4 % |
+| 0,5 | 85 | 15 | 683 | 85 / 768 ≈ 11 % |
+
+Au seuil 0,14, seule une alarme sur 40 environ correspond à un vrai défaut : les inspecteurs passeraient presque tout leur temps sur des pièces saines. Au seuil 0,5, les alarmes sont plus souvent justifiées, mais 15 défauts sur 100 passent. Le même modèle, avec la même AUC, peut sembler bon sur un jeu équilibré et être difficile à utiliser quand l'événement recherché est rare. La précision dépend de la proportion de défauts, alors que le rappel et le taux de fausses alarmes n'en dépendent pas.
+
+### Exercice 1. `CIBLE` à 0,99
+
+```
+Seuil choisi pour rappel >= 99%    seuil=0.06  rappel=0.992  précision=0.596  fausses alarmes=0.684  (défauts ratés : 8/1008)
+```
+
+| Cible de rappel | Seuil | Rappel test | Défauts ratés | Fausses alarmes | Précision |
+|---|---|---|---|---|---|
+| aucune (seuil 0,5) | 0,50 | 0,854 | 147 | 6,9 % | 0,927 |
+| 95 % | 0,14 | 0,962 | 38 | 39,4 % | 0,713 |
+| 99 % | 0,06 | 0,992 | 8 | 68,4 % | 0,596 |
+
+Les fausses alarmes passent de 39,4 % à 68,4 % : plus des deux tiers des pièces saines déclenchent l'alarme. Pour trouver 30 défauts de plus (de 38 à 8 ratés), on paie environ 290 fausses alarmes supplémentaires sur les 992 pièces saines, soit près de 10 fausses alarmes par défaut récupéré. Entre le seuil 0,5 et 0,14, on récupérait 109 défauts pour environ 320 fausses alarmes de plus, soit 3 par défaut.
+
+Chaque défaut supplémentaire coûte donc de plus en plus cher. Les derniers défauts sont ceux que le modèle distingue le moins bien, sans doute ceux dont l'écho est plus faible que le bruit : pour les attraper, il faut descendre le seuil presque à zéro et accepter presque tout.
+
+À ce stade, le modèle se rapproche d'une règle qui déclarerait toutes les pièces défectueuses. Cette règle aurait un rappel de 100 % et une précision de 0,504 (la proportion de défauts dans le test) ; à 0,596, le modèle ne fait plus beaucoup mieux.
+
+### Exercice 2. Calcul à la main à seuil 0,5
+
+À partir de la matrice de confusion (924 vrais négatifs, 68 faux positifs, 147 faux négatifs, 861 vrais positifs) :
+
+- rappel = 861 / (861 + 147) = 861 / 1 008 = 0,854 ;
+- précision = 861 / (861 + 68) = 861 / 929 = 0,927 ;
+- taux de fausses alarmes = 68 / (68 + 924) = 68 / 992 = 0,069 ;
+- exactitude = (924 + 861) / 2 000 = 0,893.
+
+Les trois premiers chiffres sont exactement ceux affichés par le script.
+
+### Exercice 3. Intervalle de confiance par bootstrap
+
+J'ai ajouté dans `04_evaluation.py`, après le rapport à seuil 0,5, un bootstrap sur l'exactitude du test : 1 000 tirages de 2 000 signaux avec remise parmi les prédictions, l'exactitude calculée à chaque tirage, puis les percentiles 2,5 % et 97,5 %.
+
+```
+Exactitude (test, seuil 0.5) = 0.892  intervalle de confiance à 95 % : [0.878 ; 0.905]
+```
+
+L'exactitude vaut 0,892, avec un intervalle de confiance à 95 % de 0,878 à 0,905, soit environ ±1,4 point, conforme aux ±1,5 point annoncés par le guide.
+
+Chaque tirage avec remise fabrique un jeu de test imaginaire, un peu différent du vrai : certains signaux y apparaissent plusieurs fois, d'autres pas du tout. La dispersion des 1 000 exactitudes obtenues montre de combien le résultat aurait pu varier avec un autre échantillon de 2 000 pièces.
+
+Conséquence pour mes choix de l'étape 4 : l'écart d'exactitude entre les modèles à 4 et 5 blocs (0,6 point) est plus petit que cette incertitude. Il pourrait venir du hasard de l'échantillon. L'écart de perte de validation, plus net, reste l'argument le plus solide pour avoir gardé 5 blocs.
+
+### Exercice 4. Pourquoi le seuil sur la validation ?
+
+Ma réponse : on le fait pour ne pas être trop optimiste quant à la capacité du modèle à bien fonctionner.
+
+Version plus précise : si on choisissait le seuil sur le test, il s'ajusterait à ces signaux-là, et le score du test, devenu trop optimiste, ne dirait plus comment le modèle se comportera sur des pièces nouvelles (voir l'exercice 3 de l'étape 3).

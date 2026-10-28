@@ -321,6 +321,39 @@ Comme les mêmes poids servent à toutes les positions, le filtre reconnaît un 
 
 J'ai d'abord conclu au surapprentissage parce que la courbe de validation passait au-dessus de celle d'entraînement. Ce n'est pas le bon signe : la perte de validation est souvent un peu au-dessus, et c'est normal, puisque le modèle n'a jamais vu ces signaux. Le vrai signe est une tendance : la perte d'entraînement continue de baisser pendant que celle de validation stagne ou remonte, et l'écart entre les deux se creuse. Sur le modèle à 5 blocs, ça commence vers l'epoch 30. C'est aussi pour ça que le script garde le modèle de la meilleure epoch selon la validation, et pas celui de la dernière.
 
+### Lire une matrice de confusion
+
+La matrice de confusion range les 2 000 signaux du test selon deux questions : ce qu'ils sont vraiment (les lignes, « réel ») et ce que le modèle a répondu (les colonnes, « prédit »). Avec mon modèle (5 blocs, noyau 15) et un seuil de 0,5 :
+
+| | prédit sain | prédit défaut |
+|---|---|---|
+| réellement sain (992) | 924 vrais négatifs | 68 faux positifs (fausses alarmes) |
+| réellement défectueux (1 008) | 147 faux négatifs (défauts ratés) | 861 vrais positifs |
+
+La diagonale contient les bonnes réponses, le reste les erreurs. Toutes les métriques se calculent à partir de ces quatre cases :
+
+- exactitude = (924 + 861) / 2 000 = 0,893, la part de bonnes réponses ;
+- rappel = 861 / 1 008 = 0,854, la part des défauts que le modèle trouve ;
+- précision = 861 / (861 + 68) = 0,927, la part des alarmes qui sont de vrais défauts.
+
+Les deux erreurs n'ont pas le même coût. Une fausse alarme fait recontrôler une pièce saine, ce qui coûte du temps. Un défaut raté laisse partir une pièce défectueuse, ce qui peut être grave. Ici, le modèle rate 147 défauts sur 1 008, soit environ un sur sept, alors qu'il ne fait que 68 fausses alarmes. Pour de l'inspection, on préférerait sans doute l'inverse : baisser le seuil pour rater moins de défauts, quitte à avoir plus de fausses alarmes.
+
+### Un bon modèle peut être inutilisable quand les défauts sont rares
+
+Sur le test, mon modèle a une AUC de 0,956. Au seuil choisi pour trouver au moins 95 % des défauts (0,14), il fait une précision de 0,713 : sept alarmes sur dix sont justifiées. Ça paraît correct.
+
+Mais le test contient une pièce défectueuse sur deux, ce qui n'arrive jamais en production. Avec 1 % de pièces défectueuses, sur 10 000 pièces, le modèle trouverait 96 des 100 défauts, mais déclencherait aussi 3 901 fausses alarmes sur les 9 900 pièces saines. Seule une alarme sur 40 environ serait justifiée. Le taux de fausses alarmes (39 %) ne change pas, mais il s'applique maintenant à une immense majorité de pièces saines.
+
+Ce que je retiens : le rappel et le taux de fausses alarmes ne dépendent pas de la proportion de défauts, la précision si. Avant de dire qu'un modèle est bon, il faut demander dans quelle proportion l'événement recherché se produit en vrai. Et le choix du seuil n'est pas une question technique : c'est une décision métier, qui pèse le coût d'un défaut raté contre celui d'une fausse alarme.
+
+Je vois le seuil comme le réglage de sensibilité d'un détecteur de fumée, mais dans le sens inverse : plus le seuil est bas, plus le détecteur est sensible. À 0,14, une probabilité de défaut de 15 % suffit à déclencher l'alarme, donc il trouve presque tous les défauts mais sonne aussi pour beaucoup de pièces saines. Le seuil ne change rien au modèle : les probabilités qu'il calcule restent les mêmes, seule la ligne de décision se déplace. D'ailleurs, « sensibilité » est le nom que la médecine donne au rappel.
+
+### Un résultat n'est pas un nombre exact : l'intervalle de confiance
+
+Mon exactitude sur le test vaut 0,892, mais elle est mesurée sur un seul échantillon de 2 000 pièces. Avec 2 000 autres, elle aurait été un peu différente. Le bootstrap estime cette variation sans avoir besoin de nouvelles données : on tire 1 000 fois 2 000 signaux avec remise parmi les prédictions, on recalcule l'exactitude à chaque fois, et on garde les 95 % de valeurs centrales. J'obtiens [0,878 ; 0,905], soit environ ±1,4 point.
+
+Ça change la façon de lire mes comparaisons de l'étape 4. Un écart de 0,6 point entre deux modèles est plus petit que l'incertitude : il pourrait venir du hasard. Pour comparer deux modèles sérieusement, il faut que l'écart dépasse nettement cette marge, ou répéter les entraînements avec plusieurs graines. Je présenterai désormais mes résultats sous la forme « 89,2 % ± 1,4 point » plutôt qu'avec un seul chiffre.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.

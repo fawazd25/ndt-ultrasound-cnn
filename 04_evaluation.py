@@ -35,6 +35,17 @@ pva, pte = probas(Xva), probas(Xte)
 print(f"AUC (test) = {roc_auc_score(yte, pte):.3f}\n")
 cm = rapport(yte, pte, 0.5, "Seuil standard 0.5")
 
+# --- Intervalle de confiance sur l'exactitude (bootstrap) ---
+correct = (pte >= 0.5) == yte               # True si la prédiction est juste, pour chacun des 2000 signaux
+rng = np.random.default_rng(0)              # graine fixe : résultat reproductible
+exactitudes = []
+for _ in range(1000):                       # 1000 tirages
+    idx = rng.integers(0, len(yte), len(yte))   # 2000 indices tirés AVEC remise
+    exactitudes.append(correct[idx].mean())     # exactitude de ce tirage
+bas, haut = np.percentile(exactitudes, [2.5, 97.5])
+print(f"Exactitude (test, seuil 0.5) = {correct.mean():.3f}  "
+      f"intervalle de confiance à 95 % : [{bas:.3f} ; {haut:.3f}]\n")
+
 # Choisir le seuil sur la VALIDATION (pas sur le test, sinon on triche) :
 # le plus haut seuil qui garantit un rappel >= 95 %.
 CIBLE = 0.95
