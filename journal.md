@@ -442,6 +442,14 @@ Mettre le modèle derrière une API, c'est l'exposer à n'importe qui. L'API val
 
 J'ai ensuite ajouté un journal des requêtes. Il garde l'heure, la décision, la probabilité et une empreinte SHA-256 du signal, mais jamais le signal lui-même : il appartient au client, il servirait de jeu de données à un attaquant, et il ferait gonfler le journal de 11 Ko par requête. L'empreinte suffit pour retrouver une décision contestée. Un journal doit être utile sans devenir lui-même une fuite de données.
 
+### Chaque décimale renvoyée par l'API est une information pour l'attaquant
+
+Mon API renvoie la probabilité avec quatre décimales et le seuil. Pour un utilisateur, c'est pratique. Pour un attaquant qui peut l'interroger sans limite, c'est de quoi copier le modèle (en entraînant un réseau à reproduire les probabilités) et de quoi l'attaquer sans en connaître les poids (en estimant le gradient par petites modifications du signal). Le raisonnement de menace de l'étape 6 supposait qu'il fallait connaître le modèle ; l'API elle-même peut le lui donner.
+
+Les défenses relèvent surtout de la conception de l'API : ne renvoyer que le nécessaire, réserver le détail aux utilisateurs authentifiés, limiter le nombre de requêtes et surveiller le journal. Je retiens qu'on conçoit une réponse d'API en se demandant ce qu'elle apprend à quelqu'un de malveillant, pas seulement ce qu'elle apporte à l'utilisateur.
+
+Je l'ai ensuite démontré (`09_extraction.py`). En jouant l'attaquant, avec seulement l'accès à l'API et 6 000 signaux sans étiquettes, j'ai obtenu en une demi-minute une copie à 85 % d'exactitude (l'original fait 89 %). Avec la décision seule au lieu de la probabilité, la copie plafonne à 79 %. En attaquant ma copie puis en envoyant les signaux modifiés à l'API, 17 % des défauts détectés passent pour sains, contre 2 % avec un bruit au hasard. L'attaque adverse de l'étape 6 n'a donc pas besoin des poids du modèle : l'API suffit. La défense la plus simple reste la limite de requêtes, puisque l'attaque en a envoyé près de 12 000 en 29 secondes.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.

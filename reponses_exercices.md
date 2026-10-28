@@ -654,3 +654,62 @@ tests/test_api.py::test_signal_trop_court PASSED
 Le fichier `08_api_flask.py` commence par un chiffre et ne peut pas être importé avec `import` : la fixture `client` le charge avec `importlib` et se place à la racine du projet, puisque l'API lit ses fichiers en chemins relatifs. `app.test_client()` simule les requêtes sans lancer de serveur, d'où les 0,15 seconde.
 
 Pour vérifier que les tests savent échouer, j'ai remplacé temporairement le code 400 par 200 dans l'API. `test_signal_trop_court` est alors passé en échec avec `assert 200 == 400`, puis j'ai remis le code 400. Un test qui ne peut pas échouer ne protège de rien.
+
+### Exercice 5. Ce que l'API laisse fuir : l'extraction de modèle
+
+L'API renvoie la probabilité avec quatre décimales, la décision et le seuil. Pour un attaquant qui peut l'interroger autant qu'il veut, c'est beaucoup d'information.
+
+Ce qui fuit :
+
+- La probabilité exacte dit, pour chaque signal, à quel point le modèle est sûr de lui. Une simple décision « défaut / saine » ne donne qu'un bit par requête ; la probabilité en donne bien plus.
+- Le seuil est renvoyé dans chaque réponse : l'attaquant sait exactement quelle probabilité il doit faire passer sous 0,15 pour qu'un défaut soit déclaré sain.
+
+Ce que l'attaquant peut en faire :
+
+1. Copier le modèle (extraction). Il fabrique ou collecte des milliers de signaux, les soumet, et entraîne son propre réseau à reproduire les probabilités reçues. Imiter une probabilité apprend beaucoup plus vite qu'imiter une étiquette, parce que chaque réponse dit aussi « de combien » le modèle penche. Il obtient une copie qui coûte peu à fabriquer, alors que l'original a demandé des données et du travail.
+2. Attaquer sans connaître les poids. Mon attaque FGSM de l'étape 6 utilisait le gradient du modèle, donc un accès en boîte blanche. Avec la probabilité exacte, l'attaquant peut estimer ce gradient lui-même : il modifie un peu un point du signal, regarde de combien la probabilité change, et recommence pour chaque point. Il lui faut environ 1 000 requêtes par signal (deux par point, 512 points). Il peut aussi attaquer sa copie, en boîte blanche, puis envoyer à l'API les signaux trompeurs ainsi fabriqués, qui fonctionnent souvent aussi sur l'original.
+
+Les défenses :
+
+- Ne renvoyer que ce dont le client a besoin : la décision, ou une probabilité arrondie par grandes classes (faible, moyenne, élevée). Pas le seuil.
+- Réserver la probabilité exacte aux utilisateurs authentifiés qui en ont besoin, par exemple un inspecteur qui doit trier les pièces à recontrôler.
+- Authentifier les clients et limiter le nombre de requêtes par client et par période : l'extraction demande des milliers de requêtes.
+- Surveiller le journal des requêtes : beaucoup de requêtes d'une même source, ou des signaux presque identiques envoyés en rafale (le signe d'une estimation de gradient), doivent déclencher une alerte.
+
+Le compromis : chaque information retirée de la réponse gêne l'attaquant mais aussi les utilisateurs légitimes. La probabilité est utile à un inspecteur ; il faut donc la donner à qui en a besoin, pas à tout le monde.
+
+Référence : Tramèr et al., « Stealing Machine Learning Models via Prediction APIs », USENIX Security 2016.
+
+#### Démonstration : `09_extraction.py`
+
+Le script joue un attaquant qui n'a que l'accès à l'API. Il génère 6 000 signaux sans étiquettes (graine 50), les soumet à `/diagnostic`, entraîne sa propre copie (architecture différente : 4 blocs, noyau 9) sur les réponses, puis attaque cette copie avec FGSM et envoie les signaux modifiés à l'API.
+
+```
+Seuil révélé par l'API : 0.15
+Modèle original (via l'API) : exactitude 0.893
+
+ requêtes  réponses utilisées   accord avec l API  exactitude
+      500  probabilité                      0.726       0.696
+      500  décision seule                   0.700       0.618
+     2000  probabilité                      0.705       0.706
+     2000  décision seule                   0.733       0.669
+     6000  probabilité                      0.833       0.850
+     6000  décision seule                   0.838       0.786
+
+Attaque par transfert sur 978 défauts que l'API détecte :
+   eps   défauts devenus « saine » (attaque)   (bruit au hasard)
+  0.02                                 10.3%                0.9%
+  0.05                                 17.0%                2.2%
+
+Requêtes envoyées à l'API : 11912 en 29 s
+```
+
+L'exactitude de 0,893 de l'original, mesurée à travers l'API, est celle de l'étape 5 : l'API traite les signaux comme le reste du projet.
+
+Avec 6 000 requêtes et sans aucune étiquette, l'attaquant obtient une copie qui atteint 85 % d'exactitude, contre 89,3 % pour l'original. La probabilité exacte vaut nettement plus que la décision seule : 85,0 % contre 78,6 % à nombre de requêtes égal. L'accord avec l'API au seuil 0,15 est en revanche équivalent pour les deux copies (0,83 et 0,84) : la copie entraînée sur les décisions apprend directement la frontière à 0,15, puisque ces décisions ont été prises à ce seuil, alors que la copie entraînée sur les probabilités apprend mieux la tâche elle-même.
+
+Avec 500 et 2 000 requêtes, les copies plafonnent vers 70 %. Elles ont probablement fait trop peu de mises à jour pour sortir du plateau qu'on voit au début de chaque entraînement (environ 240 et 960 mises à jour, contre 2 800 pour 6 000 requêtes) : un attaquant pourrait simplement entraîner plus longtemps sur les mêmes réponses. Chaque configuration n'a été lancée qu'une fois.
+
+L'attaque par transfert fonctionne. Avec ε = 0,05, 17 % des défauts que l'API détectait passent pour des pièces saines, contre 2,2 % avec un bruit au hasard de même amplitude : la perturbation fabriquée sur la copie est huit fois plus efficace que le hasard, sans jamais avoir accédé aux poids du modèle. Elle reste moins efficace qu'une attaque en boîte blanche, parce que la copie n'est fidèle qu'à 83 %.
+
+Toute l'attaque a pris 11 912 requêtes en 29 secondes, toutes dans `sorties/requetes.log`. C'est très loin du rythme d'un appareil d'inspection : une limite de requêtes par client aurait bloqué l'extraction dès le début, et la surveillance du journal l'aurait repérée.

@@ -27,6 +27,8 @@ python 05_robustesse.py        # bruit, étalonnage, décalage, attaque adverse
 python 06_export_onnx.py       # export au format ONNX
 python 07_quantification.py    # élagage et quantification INT8
 python 08_api_flask.py --test  # API de diagnostic (ou sans --test pour la lancer)
+python 09_extraction.py        # démonstration d'extraction de modèle par l'API
+pytest -v                      # tests de l'API
 cd cpp && python exporter_poids.py && g++ -O2 -std=c++17 -o infer infer.cpp && ./infer
 ```
 
@@ -75,6 +77,12 @@ La porte fixe surveille une fenêtre de temps fixe : elle rate les défauts prof
 | attaque adverse FGSM, ε = 0,02 | 0,372 | 0,435 |
 
 L'augmentation rend le modèle presque insensible à une erreur d'étalonnage de 30 %, sans rien coûter sur les signaux normaux. Il reste très fragile face à une attaque adverse : une perturbation de 2 %, invisible à l'œil, le fait tomber sous le hasard, même en respectant la zone morte effacée par la normalisation. Le raisonnement de menace (qui pourrait attaquer, où, avec quel accès) est dans `journal.md`.
+
+## Sécurité de l'API
+
+L'API (`08_api_flask.py`) valide chaque entrée, limite la taille des requêtes à 64 Ko, journalise chaque décision sans conserver le signal (seulement une empreinte SHA-256), et expose une route `GET /sante` qui vérifie que le modèle calcule encore.
+
+`09_extraction.py` montre ce qu'elle laisse fuir. Un attaquant qui n'a que l'accès à l'API, avec 6 000 signaux sans étiquettes, entraîne en 30 secondes une copie à 85 % d'exactitude (78,6 % s'il ne reçoit que la décision). En attaquant cette copie, il fait passer 17 % des défauts détectés pour des pièces saines, contre 2 % avec un bruit au hasard. Les défenses : ne renvoyer que la décision aux clients qui n'ont pas besoin de la probabilité, ne pas exposer le seuil, authentifier et limiter les requêtes par client, surveiller le journal.
 
 ## Documentation du travail
 
