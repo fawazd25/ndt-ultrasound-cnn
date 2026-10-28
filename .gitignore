@@ -5,3 +5,7 @@ sorties/*.onnx
 .idea/
 .DS_Store
 guide_projet_cnn_ndt.md
+cpp/infer
+cpp/infer_*
+cpp/poids.txt
+cpp/test_vecteurs.txt

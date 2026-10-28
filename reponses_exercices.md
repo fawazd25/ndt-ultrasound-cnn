@@ -540,3 +540,36 @@ J'ai ajouté au tableau de quantification le rappel au seuil 0,5 et au seuil d'i
 La quantification ne fait pas perdre de rappel : le modèle int8 rate même 3 défauts de moins au seuil d'inspection. L'écart est trop petit pour parler d'amélioration (3 signaux sur 1 008) ; il vient des arrondis, qui décalent légèrement les probabilités. Comme l'exactitude baisse d'un signal, le modèle int8 fait probablement un peu plus de fausses alarmes en échange.
 
 Oui, le rappel est plus important ici que l'exactitude. Un défaut raté laisse partir une pièce défectueuse, alors qu'une fausse alarme ne coûte qu'un contrôle de plus. L'exactitude mélange les deux erreurs : une quantification pourrait faire rater plusieurs défauts de plus tout en évitant autant de fausses alarmes, sans que l'exactitude bouge. Il faut aussi mesurer le rappel au seuil d'inspection, pas seulement à 0,5 : c'est près de ce seuil bas que se trouvent les défauts difficiles, ceux qu'un petit décalage de probabilité peut faire basculer. Avant d'embarquer un modèle quantifié dans un appareil, c'est cette vérification qui compte.
+
+## Étape 9 : le réseau en C++ (`cpp/infer.cpp`)
+
+Le C++ refait exactement le calcul de PyTorch : écart maximal de 2,4 × 10⁻⁶ sur les 20 signaux de test, avec le modèle retenu (5 blocs, noyau 15). Je connais déjà le C++, donc je n'ai pas fait l'exercice 4 (learncpp.com).
+
+### Exercice 1. Chronomètre et options de compilation
+
+`predire` est chronométré avec `std::chrono::steady_clock` sur 50 passages des 20 signaux, après un échauffement. Une variable `volatile` récupère les résultats pour que le compilateur ne supprime pas les calculs.
+
+| Version | Temps par signal |
+|---|---|
+| C++, `-O0` | 8,60 ms |
+| C++, `-O2` | 1,88 ms |
+| ONNX Runtime float32, un signal (étape 8) | environ 0,05 ms |
+| ONNX Runtime int8, un signal (étape 8) | environ 0,03 ms |
+
+`-O2` rend le programme 4,6 fois plus rapide que `-O0`, sans changer une ligne de code : le compilateur garde les variables dans les registres, simplifie les calculs d'indices et déroule les boucles internes.
+
+Même optimisé, le C++ naïf reste environ 40 fois plus lent qu'ONNX Runtime. Les tenseurs sont des `vector<vector<float>>`, dispersés en mémoire ; la convolution est faite avec quatre boucles imbriquées, sans instructions vectorielles (SIMD) ni plusieurs cœurs ; chaque couche alloue de nouveaux tableaux. Une bibliothèque comme ONNX Runtime range les données de façon contiguë et transforme les convolutions en produits de matrices optimisés pour le processeur. Ce code sert à comprendre, pas à déployer.
+
+### Exercice 2. Sigmoïde et seuil
+
+Le programme calcule la probabilité avec la sigmoïde et compare au seuil d'inspection, lu dans `../sorties/seuil.json` plutôt qu'écrit en dur. Le guide indique 0,24, mais c'était le seuil de son modèle ; le mien est 0,15.
+
+Le seuil change des décisions. Les signaux 3, 10 et 17 ont un logit négatif (probabilités 0,32, 0,41 et 0,38) : au seuil 0,5 ils étaient déclarés sains, au seuil 0,15 ils déclenchent l'alarme. C'est le choix de l'étape 5 vu sur des signaux concrets : on accepte plus d'alarmes pour rater moins de défauts.
+
+### Exercice 3. Le bug d'indexation silencieux
+
+Avec `-DBUG_INDEX`, la convolution utilise `* c.k` au lieu de `* c.k + j` : chaque filtre réutilise son premier poids à toutes les positions du noyau.
+
+L'écart avec PyTorch monte à 13,9, et le programme se termine normalement. Les 20 signaux sont déclarés sains, avec des probabilités sous 2 %, y compris les dix que PyTorch classe nettement défectueux (le signal 0 passe d'un logit de 7,35 à −5,86). Le modèle bogué rate tous les défauts sans le moindre message d'erreur.
+
+C'est le pire type d'erreur pour une inspection : rien ne plante, les sorties ont l'air plausibles, et le bug ne se voit qu'en comparant à une référence. C'est pour ça que `infer.cpp` compare chaque sortie à celle de PyTorch et renvoie un code d'erreur quand l'écart dépasse 10⁻³ : dans une chaîne automatique, ce code suffit à bloquer le déploiement.

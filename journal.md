@@ -430,6 +430,12 @@ En réentraînant 3 epochs après l'élagage, le modèle récupère tout son niv
 
 En mesurant la latence par lots de 1, 16 et 128 signaux, j'ai vu que regrouper les signaux divise le temps par signal par trois. Chaque appel au modèle a un coût fixe, partagé entre tous les signaux du lot. Il faut donc distinguer deux besoins : la latence (le temps pour obtenir une réponse sur un signal précis, important si l'appareil doit réagir tout de suite) et le débit (le nombre de signaux traités par seconde, important pour analyser un balayage complet). On n'optimise pas de la même façon pour l'un et pour l'autre, et l'avantage de la quantification n'est pas le même : deux fois plus rapide pour un signal seul, seulement 20 % de mieux sur un gros lot.
 
+### Le réseau en C++ : des multiplications, des additions, et des bugs silencieux
+
+Faire tourner le réseau en C++ sans bibliothèque montre qu'un réseau de neurones n'est que des multiplications et des additions rangées dans des boucles : quatre boucles imbriquées pour la convolution, un `max` pour ReLU et le pooling, une moyenne et une somme pondérée à la fin. Le résultat est identique à PyTorch à 2 millionièmes près.
+
+Deux leçons. La première sur la performance : le compilateur seul accélère le code de 4,6 fois entre `-O0` et `-O2`, mais le code naïf reste 40 fois plus lent qu'ONNX Runtime, qui range les données en mémoire de façon contiguë et utilise les instructions vectorielles du processeur. La seconde sur la fiabilité : en oubliant un `+ j` dans un indice, le modèle déclare toutes les pièces saines sans aucune erreur. Un code de calcul numérique se teste en le comparant à une référence, sur des entrées connues, à chaque modification.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.

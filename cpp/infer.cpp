@@ -2,13 +2,19 @@
 // Objectif pédagogique : comprendre ce que fait réellement un réseau de neurones.
 //
 // Compilation :  g++ -O2 -std=c++17 -o infer infer.cpp
-// Exécution   :  ./infer            (lit poids.txt et test_vecteurs.txt)
+// Exécution   :  ./infer            (lit poids.txt, test_vecteurs.txt et ../sorties/seuil.json)
+//
+// Exercice 3 de l'étape 9 : compiler avec -DBUG_INDEX introduit volontairement
+// une erreur d'indexation dans la convolution (g++ -O2 -std=c++17 -DBUG_INDEX ...).
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 struct Conv {
@@ -59,7 +65,11 @@ Tenseur convolution(const Tenseur& x, const Conv& c) {
             for (int i = 0; i < c.c_in; ++i)
                 for (int j = 0; j < c.k; ++j) {
                     int s = t + j - pad;
+#ifdef BUG_INDEX
+                    if (s >= 0 && s < L) somme += c.w[(o * c.c_in + i) * c.k] * x[i][s];   // bug volontaire : oublie + j
+#else
                     if (s >= 0 && s < L) somme += c.w[(o * c.c_in + i) * c.k + j] * x[i][s];
+#endif
                 }
             y[o][t] = somme;
         }
@@ -98,13 +108,29 @@ float predire(const Modele& m, const std::vector<float>& signal) {
     return logit;
 }
 
+// Lit le seuil d'inspection choisi à l'étape 5 dans ../sorties/seuil.json (0,5 si absent).
+float lire_seuil(const std::string& chemin) {
+    std::ifstream f(chemin);
+    if (!f) return 0.5f;
+    std::stringstream ss; ss << f.rdbuf();
+    const std::string txt = ss.str();
+    const auto pos = txt.find("\"seuil\"");
+    if (pos == std::string::npos) return 0.5f;
+    return std::stof(txt.substr(txt.find(':', pos) + 1));
+}
+
+float sigmoide(float z) { return 1.0f / (1.0f + std::exp(-z)); }
+
 int main() {
     Modele m = charger("poids.txt");
+    const float seuil = lire_seuil("../sorties/seuil.json");
+    std::cout << "Seuil d'inspection : " << seuil << "\n\n";
     std::ifstream f("test_vecteurs.txt");
     if (!f) { std::cerr << "test_vecteurs.txt introuvable\n"; return 1; }
     int n, L;
     f >> n >> L;
     float ecart_max = 0;
+    std::vector<std::vector<float>> signaux;
     for (int i = 0; i < n; ++i) {
         float attendu;
         f >> attendu;
@@ -112,9 +138,22 @@ int main() {
         for (auto& v : s) f >> v;
         float obtenu = predire(m, s);
         ecart_max = std::max(ecart_max, std::fabs(obtenu - attendu));
+        const float p = sigmoide(obtenu);
         std::cout << "signal " << i << "  PyTorch=" << attendu << "  C++=" << obtenu
-                  << "  -> " << (obtenu > 0 ? "DÉFAUT" : "saine") << "\n";
+                  << "  proba=" << p << "  -> " << (p >= seuil ? "DÉFAUT" : "saine") << "\n";
+        signaux.push_back(std::move(s));
     }
     std::cout << "\nÉcart maximal PyTorch vs C++ : " << ecart_max << "\n";
+
+    // Chronomètre (exercice 1) : on prédit tous les signaux plusieurs fois et on mesure le temps moyen.
+    const int repetitions = 50;
+    volatile float puits = 0;                       // empêche le compilateur de supprimer les calculs
+    for (const auto& s : signaux) puits = puits + predire(m, s);   // échauffement
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int r = 0; r < repetitions; ++r)
+        for (const auto& s : signaux) puits = puits + predire(m, s);
+    const auto t1 = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / (repetitions * signaux.size());
+    std::cout << "Temps moyen par signal : " << ms << " ms\n";
     return ecart_max < 1e-3 ? 0 : 2;
 }
