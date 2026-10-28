@@ -573,3 +573,84 @@ Avec `-DBUG_INDEX`, la convolution utilise `* c.k` au lieu de `* c.k + j` : chaq
 L'écart avec PyTorch monte à 13,9, et le programme se termine normalement. Les 20 signaux sont déclarés sains, avec des probabilités sous 2 %, y compris les dix que PyTorch classe nettement défectueux (le signal 0 passe d'un logit de 7,35 à −5,86). Le modèle bogué rate tous les défauts sans le moindre message d'erreur.
 
 C'est le pire type d'erreur pour une inspection : rien ne plante, les sorties ont l'air plausibles, et le bug ne se voit qu'en comparant à une référence. C'est pour ça que `infer.cpp` compare chaque sortie à celle de PyTorch et renvoie un code d'erreur quand l'écart dépasse 10⁻³ : dans une chaîne automatique, ce code suffit à bloquer le déploiement.
+
+## Étape 10 : l'API (`08_api_flask.py`)
+
+Sortie du test intégré, avec mon modèle et mon seuil de 0,15 :
+
+```
+réel: défaut -> {'decision': 'DEFAUT', 'probabilite_defaut': 0.9956, 'seuil': 0.15}
+réel: saine  -> {'decision': 'saine', 'probabilite_defaut': 0.1066, 'seuil': 0.15}
+réel: saine  -> {'decision': 'DEFAUT', 'probabilite_defaut': 0.636, 'seuil': 0.15}
+réel: défaut -> {'decision': 'saine', 'probabilite_defaut': 0.0722, 'seuil': 0.15}
+réel: saine  -> {'decision': 'saine', 'probabilite_defaut': 0.0362, 'seuil': 0.15}
+réel: défaut -> {'decision': 'DEFAUT', 'probabilite_defaut': 1.0, 'seuil': 0.15}
+entrée invalide -> {'erreur': "'signal' doit être une liste de 512 nombres"}
+pas du JSON     -> {'erreur': "'signal' doit être une liste de 512 nombres"}
+santé           -> 200 {'entree': ['lot', '1', '512'], 'modele': 'sorties/cnn.onnx', 'seuil': 0.15, 'statut': 'ok'}
+```
+
+Sur ces 6 signaux, 4 décisions sont justes, avec une fausse alarme (une pièce saine à 0,636) et un défaut raté (probabilité 0,0722, sous le seuil). Six signaux ne suffisent pas à juger le modèle, qui rate environ 3 % des défauts sur les 1 008 du test ; ils montrent seulement que les deux types d'erreurs existent, même au seuil bas choisi. Ce défaut raté est sans doute l'un de ceux dont l'écho est plus faible que le bruit.
+
+Les entrées invalides sont rejetées avant d'atteindre le modèle. Le message est le même pour une liste trop courte et pour un corps qui n'est pas du JSON, parce que `get_json(silent=True)` renvoie `None` dans le second cas.
+
+### Exercice 1. Route `GET /sante`
+
+J'ai d'abord écrit la clé `status` au lieu de `statut`. Dans une API, les noms de clés font partie du contrat : un outil de surveillance qui attend `statut` aurait conclu à une panne.
+
+La version finale va plus loin qu'un simple `{"statut": "ok"}`. Elle fait une prédiction sur un signal nul pour vérifier que le modèle est chargé et calcule encore, contrôle que la sortie est un nombre fini, et renvoie le code 503 en cas de problème, puisque les outils de surveillance regardent d'abord le code HTTP. Elle indique aussi le fichier du modèle, la forme d'entrée attendue et le seuil utilisé, ce qui permet de repérer tout de suite un mauvais déploiement. La vérification reste légère : un contrôle de santé qui dépendrait de services externes pourrait faire tomber tous les serveurs à la fois lors d'une panne passagère.
+
+### Exercice 2. Limiter la taille des requêtes
+
+J'ai fixé `app.config["MAX_CONTENT_LENGTH"] = 64 * 1024` et ajouté un gestionnaire d'erreur 413 qui répond en JSON (par défaut, Flask renvoie une page HTML, illisible pour un client qui attend du JSON).
+
+```
+taille d'une requête normale : 11.0 Ko
+énorme JSON (26 Mo) -> 413 {'erreur': 'requête trop volumineuse (maximum 64 Ko)'}
+```
+
+Une requête normale pèse 11 Ko ; la limite de 64 Ko laisse près de six fois cette taille. Le JSON de 26 Mo est refusé avec le code 413.
+
+Sans limite, un attaquant peut envoyer des requêtes de plusieurs gigaoctets que le serveur essaie de charger en mémoire puis de décoder, jusqu'à tomber : c'est un déni de service qui ne demande aucune compétence. Flask compare la taille annoncée à la limite avant de lire le corps, donc la requête est refusée sans consommer de mémoire. La validation de `diagnostic()` (512 nombres finis) ne protège pas contre ça : elle s'exécute une fois le JSON déjà chargé. Les deux protections se complètent. En production, on placerait aussi cette limite dans le serveur web devant Flask, avec une limitation du nombre de requêtes par client.
+
+### Exercice 3. Journaliser les requêtes sans le signal
+
+Chaque requête est écrite dans `sorties/requetes.log` avec le module `logging` : l'heure, la décision, la probabilité, le seuil et une empreinte du signal (les 16 premiers caractères de son SHA-256). Les requêtes rejetées sont aussi notées, avec leur motif.
+
+```
+2026-10-28T15:54:38+0100 decision=DEFAUT proba=0.9956 seuil=0.15 signal=487a4bbb5e49842c
+2026-10-28T15:54:38+0100 decision=saine proba=0.1066 seuil=0.15 signal=23ca19903dce4c3e
+...
+2026-10-28T15:54:38+0100 rejet=format
+2026-10-28T15:54:38+0100 rejet=format
+2026-10-28T15:54:39+0100 rejet=trop_volumineux
+```
+
+L'empreinte identifie un signal sans en révéler le contenu : si un client conteste une décision, on recalcule l'empreinte de son signal et on retrouve la ligne. Elle permet aussi de repérer un même signal envoyé de nombreuses fois. Les rejets journalisés aident à détecter quelqu'un qui sonde l'API.
+
+Pourquoi ne pas écrire le signal complet :
+
+1. Confidentialité : les signaux appartiennent au client et révèlent ses pièces et ses procédés ; un journal est souvent moins protégé que les données elles-mêmes (copié pour déboguer, transmis, conservé longtemps).
+2. Sécurité : un journal de signaux avec leurs décisions est un jeu de données tout prêt pour entraîner un modèle de substitution, préparer des attaques adverses ou copier le modèle.
+3. Minimisation des données (principe du RGPD) : l'heure, la décision, la probabilité et l'empreinte suffisent pour suivre l'activité et contester une décision.
+4. Volume : une requête pèse 11 Ko ; un million de requêtes ferait 11 Go de journal, contre une centaine d'octets par ligne ici.
+
+Le fichier `sorties/requetes.log` est exclu du dépôt par le `.gitignore`.
+
+### Exercice 4. Deux tests avec pytest
+
+Les tests sont dans `tests/test_api.py` et se lancent depuis la racine avec `pytest -v`.
+
+```
+tests/test_api.py::test_signal_valide PASSED
+tests/test_api.py::test_signal_trop_court PASSED
+2 passed in 0.15s
+```
+
+`test_signal_valide` envoie un vrai signal du simulateur et vérifie le code 200, la présence exacte des trois clés de la réponse, une probabilité entre 0 et 1, un seuil égal à celui de `sorties/seuil.json`, et une décision cohérente avec la probabilité et le seuil. Il ne vérifie pas que la décision est juste pour ce signal : ce serait tester le modèle, qui se trompe parfois, et non l'API.
+
+`test_signal_trop_court` envoie une liste de 3 nombres et vérifie le code 400, la présence d'un message d'erreur et l'absence de toute décision.
+
+Le fichier `08_api_flask.py` commence par un chiffre et ne peut pas être importé avec `import` : la fixture `client` le charge avec `importlib` et se place à la racine du projet, puisque l'API lit ses fichiers en chemins relatifs. `app.test_client()` simule les requêtes sans lancer de serveur, d'où les 0,15 seconde.
+
+Pour vérifier que les tests savent échouer, j'ai remplacé temporairement le code 400 par 200 dans l'API. `test_signal_trop_court` est alors passé en échec avec `assert 200 == 400`, puis j'ai remis le code 400. Un test qui ne peut pas échouer ne protège de rien.

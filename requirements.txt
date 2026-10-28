@@ -6,3 +6,4 @@ torch
 onnx
 onnxruntime
 flask
+pytest

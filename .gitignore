@@ -9,3 +9,5 @@ cpp/infer
 cpp/infer_*
 cpp/poids.txt
 cpp/test_vecteurs.txt
+sorties/*.log
+.pytest_cache/

@@ -436,6 +436,12 @@ Faire tourner le réseau en C++ sans bibliothèque montre qu'un réseau de neuro
 
 Deux leçons. La première sur la performance : le compilateur seul accélère le code de 4,6 fois entre `-O0` et `-O2`, mais le code naïf reste 40 fois plus lent qu'ONNX Runtime, qui range les données en mémoire de façon contiguë et utilise les instructions vectorielles du processeur. La seconde sur la fiabilité : en oubliant un `+ j` dans un indice, le modèle déclare toutes les pièces saines sans aucune erreur. Un code de calcul numérique se teste en le comparant à une référence, sur des entrées connues, à chaque modification.
 
+### Une API est une surface d'attaque
+
+Mettre le modèle derrière une API, c'est l'exposer à n'importe qui. L'API valide déjà chaque entrée (une liste de 512 nombres finis et bornés), mais cette validation arrive trop tard face à une requête énorme : le serveur l'a déjà chargée en mémoire. En limitant la taille à 64 Ko (une requête normale pèse 11 Ko), Flask refuse les requêtes abusives avant de les lire, et un JSON de 26 Mo reçoit un code 413. Je retrouve la défense en profondeur de la cybersécurité : plusieurs protections, chacune à un niveau différent, aucune suffisante seule.
+
+J'ai ensuite ajouté un journal des requêtes. Il garde l'heure, la décision, la probabilité et une empreinte SHA-256 du signal, mais jamais le signal lui-même : il appartient au client, il servirait de jeu de données à un attaquant, et il ferait gonfler le journal de 11 Ko par requête. L'empreinte suffit pour retrouver une décision contestée. Un journal doit être utile sans devenir lui-même une fuite de données.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.
