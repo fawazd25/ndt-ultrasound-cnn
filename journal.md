@@ -265,6 +265,8 @@ La puce graphique est 15 fois plus rapide. Je m'attendais à moins, parce que le
 
 Les résultats ne sont pas identiques aux décimales près, alors que la graine est la même. Le mélange des données est tiré par un générateur différent sur la puce graphique, et les calculs en virgule flottante n'y sont pas faits exactement dans le même ordre. Les deux entraînements arrivent au même niveau, autour de 85 à 86 % d'exactitude, ce qui est ce qui compte.
 
+Plus tard, en relançant exactement le même entraînement sur MPS (modèle retenu, augmentation, sans entraînement adverse), j'ai obtenu un fichier `cnn_meilleur.pt` identique octet pour octet au précédent. Avec la même graine et la même machine, l'entraînement est donc reproductible ; c'est en changeant de matériel (CPU contre puce graphique) que les chiffres bougent.
+
 Ensuite, j'ai gardé un seul script. Deux fichiers presque identiques auraient fini par diverger pendant les exercices. `03_train_cnn.py` choisit maintenant le device tout seul : la puce graphique si elle existe, sinon le processeur, donc il marche aussi sur une machine sans puce Apple. Il sauvegarde toujours dans `sorties/cnn_meilleur.pt`, avec les poids ramenés sur CPU, pour que les scripts 04 à 08 le retrouvent sans changement.
 
 Au passage, j'ai découvert un piège : ajouter seulement la ligne `device = torch.device(...)` ne change rien. Elle choisit le device mais n'y déplace rien. Tant que le modèle et les données ne sont pas envoyés avec `.to(device)`, tout tourne sur le processeur, sans erreur ni avertissement. Et si on ne déplace que l'un des deux, PyTorch s'arrête avec une erreur, parce que le modèle et les données doivent être sur le même device.
@@ -413,6 +415,18 @@ Les défenses les plus utiles ne sont pas forcément dans le modèle : signer le
 ONNX est un format d'échange : un fichier qui décrit les couches et les poids du réseau indépendamment de PyTorch, que d'autres programmes et d'autres langages savent lire. ONNX Runtime est un moteur rapide qui exécute ce fichier. Le script vérifie que PyTorch et ONNX Runtime donnent les mêmes sorties : un export peut réussir sans erreur et quand même produire des résultats différents.
 
 Le fichier ONNX fige aussi la forme des entrées. Seul le nombre de signaux par lot est variable ; un signal de 500 points est refusé, alors que le réseau saurait techniquement le traiter. Je trouve ce refus utile : une entrée qui ne ressemble pas aux données d'entraînement doit déclencher une erreur, pas une prédiction silencieusement fausse.
+
+### Élagage et quantification : précision, vitesse, taille
+
+L'élagage met à zéro les poids les plus petits. La quantification stocke chaque poids sur 8 bits (un entier avec un facteur d'échelle) au lieu de 32 bits à virgule. Le guide insiste sur une règle : toujours mesurer le triplet précision, vitesse, taille, jamais un seul des trois.
+
+Avec mon modèle, la quantification est presque gratuite : 0,1 point d'exactitude en moins, deux fois plus rapide, trois fois plus petit (56 Ko). C'est ce qui permettrait de le faire tourner sur un petit processeur dans un appareil d'inspection.
+
+L'élagage m'a surpris : mon modèle garde 88,5 % avec 30 % des poids supprimés, là où celui du guide s'effondre à 60 %. Un réseau plus gros a plus de redondance, donc il supporte mieux qu'on lui retire des poids. Ça donne un autre éclairage à mon choix de 5 blocs : les paramètres en plus n'apportaient presque rien en exactitude, mais ils rendent le modèle plus tolérant à la compression.
+
+### Latence ou débit : traiter les signaux un par un ou par lots
+
+En mesurant la latence par lots de 1, 16 et 128 signaux, j'ai vu que regrouper les signaux divise le temps par signal par trois. Chaque appel au modèle a un coût fixe, partagé entre tous les signaux du lot. Il faut donc distinguer deux besoins : la latence (le temps pour obtenir une réponse sur un signal précis, important si l'appareil doit réagir tout de suite) et le débit (le nombre de signaux traités par seconde, important pour analyser un balayage complet). On n'optimise pas de la même façon pour l'un et pour l'autre, et l'avantage de la quantification n'est pas le même : deux fois plus rapide pour un signal seul, seulement 20 % de mieux sur un gros lot.
 
 ### Questions encore ouvertes
 

@@ -456,3 +456,74 @@ INVALID_ARGUMENT : Got invalid dimensions for input: signal for the following in
 L'index 2 est la troisième dimension de l'entrée (lot, canal, longueur), donc la longueur du signal : il a reçu 500 et attendait 512. À l'export, seul l'axe 0 (le nombre de signaux) a été déclaré variable avec `dynamic_axes` ; la longueur a été figée à 512.
 
 Le réseau lui-même pourrait traiter un signal d'une autre longueur, grâce aux convolutions et à la moyenne globale. C'est le fichier ONNX qui impose la contrainte, et c'est plutôt une bonne chose : le modèle a été entraîné sur des signaux de 512 points, avec une zone morte de 100 points et des échos placés à des positions précises. Un appareil qui enverrait des signaux d'une autre longueur, par exemple avec une autre fréquence d'échantillonnage, est rejeté avec une erreur claire au lieu de donner des prédictions fausses sans prévenir. En pratique, il faudrait adapter les signaux à 512 points dans le prétraitement, avec un rééchantillonnage qui respecte l'échelle de temps.
+
+## Étape 8 : l'optimisation (`07_quantification.py`)
+
+Résultats avec le modèle retenu (5 blocs, noyau 15, augmentation, 40 593 paramètres), comparés à ceux du guide (modèle de départ, 15 169 paramètres) :
+
+| Élagage (sans réentraînement) | Guide | Mon modèle |
+|---|---|---|
+| 0 % | 0,856 | 0,893 |
+| 30 % | 0,606 | 0,885 |
+| 50 % | 0,502 | 0,821 |
+| 70 % | 0,504 | 0,742 |
+| 90 % | 0,504 | 0,504 |
+
+| Quantification | Exactitude | Latence par signal | Taille |
+|---|---|---|---|
+| float32 | 0,893 | 0,053 ms | 162,2 Ko |
+| int8 | 0,892 | 0,028 ms | 55,7 Ko |
+
+Mon modèle supporte beaucoup mieux l'élagage que celui du guide : avec 30 % des poids mis à zéro, il ne perd que 0,8 point, alors que le modèle du guide tombe à 60 %. Avec 2,7 fois plus de paramètres, il a plus de redondance : plusieurs poids font en partie le même travail, et en supprimer une partie abîme moins le résultat. Au-delà de 50 %, il se dégrade quand même nettement, et à 90 % il répond au hasard. Comme le rappelle le script, ces zéros ne rendent pas le calcul plus rapide : ils sont quand même multipliés.
+
+La quantification INT8 est presque gratuite ici : 0,1 point d'exactitude perdu (contre 1 point dans le guide), un calcul 1,9 fois plus rapide et un fichier 2,9 fois plus petit. Le gain de taille est plus proche du facteur 4 théorique (32 bits contre 8) que dans le guide (2,2), parce que les poids représentent une plus grande part du fichier quand le modèle est plus gros ; le reste (échelles, structure du graphe) pèse relativement moins.
+
+Les deux avertissements `Please consider to run pre-processing before quantization` sont sans conséquence ici : ONNX Runtime propose une étape facultative qui prépare le graphe avant de le quantifier.
+
+### Exercice 2. Latence selon la taille du lot
+
+J'ai ajouté à la fin de `07_quantification.py` une mesure du temps de traitement d'un lot entier, en un seul appel, pour 1, 16 et 128 signaux (médiane sur 200 appels après un échauffement).
+
+| Modèle | Lot | Lot entier | Par signal |
+|---|---|---|---|
+| float32 | 1 | 0,064 ms | 0,064 ms |
+| float32 | 16 | 0,349 ms | 0,022 ms |
+| float32 | 128 | 2,537 ms | 0,020 ms |
+| int8 | 1 | 0,028 ms | 0,028 ms |
+| int8 | 16 | 0,276 ms | 0,017 ms |
+| int8 | 128 | 2,127 ms | 0,017 ms |
+
+Traiter les signaux par lots coûte beaucoup moins cher par signal : en float32, un signal revient à 0,064 ms seul et à 0,020 ms dans un lot de 128, trois fois moins. Chaque appel a un coût fixe (préparer le calcul, vérifier l'entrée) qui est partagé entre tous les signaux du lot, et le processeur calcule plus efficacement sur de gros blocs de données. Le gain se tasse vite : presque tout est acquis dès 16 signaux.
+
+L'avantage de l'int8 dépend aussi de la taille du lot. Il est 2,3 fois plus rapide pour un signal seul, mais seulement 1,3 fois pour 16 signaux et 1,2 fois pour 128. Pour un signal seul, le coût fixe domine, et le modèle int8 le réduit davantage ; dans un gros lot, c'est le calcul lui-même qui domine, et sur ce processeur l'int8 ne l'accélère que d'environ 20 %.
+
+Le bon réglage dépend de l'usage. Si l'appareil doit répondre à chaque mesure immédiatement, on travaille signal par signal et l'int8 divise le temps par deux. Si on analyse un balayage complet après coup, on regroupe les signaux et l'int8 apporte surtout un modèle trois fois plus petit. Dans les deux cas, les temps (quelques centièmes de milliseconde par signal) sont largement suffisants sur ce processeur ; sur un petit processeur embarqué, ils seraient bien plus grands, et c'est là que l'int8 compterait vraiment.
+
+Le temps d'un signal seul en float32 était de 0,054 ms au début du script et de 0,064 ms ici : les mesures de latence varient d'une exécution à l'autre, d'où l'intérêt de regarder des ordres de grandeur et des rapports plutôt que la troisième décimale.
+
+### Exercice 3. Statique ou dynamique, après ou pendant l'entraînement
+
+1. Les poids sont toujours quantifiés à l'avance ; la différence porte sur les activations, les valeurs qui circulent entre les couches pendant le calcul.
+2. En quantification statique (celle du script), on fait passer des signaux de calibration (la classe `Calibration`, 200 signaux) pour fixer une fois pour toutes l'échelle de chaque activation : le calcul est ensuite rapide, mais tout dépend de la représentativité de ces signaux.
+3. En quantification dynamique, l'échelle des activations est recalculée à chaque passage : souvent un peu plus précis, mais plus lent ; ONNX Runtime la conseille plutôt pour les RNN et les transformers, et la statique pour les CNN comme le mien.
+4. La quantification après l'entraînement (statique ou dynamique) convertit un modèle déjà entraîné, sans le toucher : c'est simple et rapide, mais le modèle n'a jamais appris à vivre avec ces arrondis.
+5. La quantification pendant l'entraînement (QAT) simule les arrondis 8 bits dès l'entraînement pour que les poids s'y adaptent : plus coûteuse, elle sert quand la quantification après coup perd trop de précision, ce qui n'est pas mon cas (0,1 point perdu).
+
+Source : documentation d'ONNX Runtime, « Quantize ONNX Models » (https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html).
+
+### Exercice 1. Réentraîner après élagage
+
+J'ai ajouté à `07_quantification.py` une section qui élague le modèle puis le réentraîne 3 epochs (Adam, LR 1e-3, lots de 64). Le masque d'élagage reste en place : les poids supprimés restent à zéro, seuls les poids restants s'ajustent.
+
+| Poids supprimés | Avant réentraînement | Après 3 epochs |
+|---|---|---|
+| 0 % (référence) | 0,893 | |
+| 50 % | 0,821 | 0,894 |
+| 70 % | 0,742 | 0,891 |
+| 90 % | 0,504 | 0,794 |
+
+Oui, on récupère la performance, et très vite. À 50 % et 70 %, trois epochs suffisent pour revenir au niveau du modèle complet : la moitié, voire les trois quarts des poids étaient en trop pour ce problème. À 90 %, il ne reste qu'environ 4 000 poids ; le modèle repart du hasard et remonte à 79 %, sans rattraper le modèle complet en 3 epochs. C'est cohérent avec l'étape 4, où le petit modèle `(4, 8, 16, 16)`, avec 3 841 paramètres, atteignait 84 % mais en 60 epochs.
+
+L'élagage seul abîme le modèle parce qu'il supprime des poids sans que les autres aient l'occasion de compenser. Le réentraînement donne cette occasion. Ces poids à zéro ne rendent toujours pas le calcul plus rapide, mais un modèle élagué à 70 % puis réentraîné pourrait être compressé efficacement, ou combiné à de l'élagage structuré (retirer des filtres entiers) pour vraiment gagner en vitesse.
+
+Le réentraînement s'est fait sans augmentation de données, et les modèles réentraînés ne sont pas sauvegardés : c'est une expérience, pas un changement du modèle de référence.
