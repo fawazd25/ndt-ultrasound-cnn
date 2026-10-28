@@ -422,3 +422,37 @@ Décision : pour une inspection, rater des défauts coûte plus cher qu'être vu
 Le raisonnement complet (qui, où, accès nécessaire, défenses) est dans `journal.md`, section « Raisonnement de menace : qui pourrait attaquer un signal d'inspection ? ».
 
 En résumé : les attaquants les plus crédibles ne sont pas des concurrents, mais ceux qui ont intérêt à faire passer des pièces défectueuses et un accès à la chaîne (fournisseur ou sous-traitant fraudeur, employé malveillant, acteur étatique visant une infrastructure critique). La condition principale est de pouvoir modifier le signal numérique entre l'appareil et le modèle, et de connaître le modèle ou d'en avoir une copie approchée. Les défenses les plus efficaces sont l'intégrité des données (signature, chiffrement), le contrôle d'accès et la journalisation, avant l'entraînement adverse.
+
+## Étape 7 : l'export ONNX (`06_export_onnx.py`)
+
+Résultat de l'export du modèle retenu (5 blocs, noyau 15, augmentation) :
+
+```
+Écrit : sorties/cnn.onnx
+Écart max PyTorch vs ONNX Runtime : 6.20e-06
+```
+
+Sur 200 signaux de test, la plus grande différence entre les sorties de PyTorch et d'ONNX Runtime est de 6 millionièmes, sous la tolérance de 1e-4 fixée par le script. Elle vient des arrondis : les deux moteurs calculent en nombres à virgule flottante sur 32 bits, mais pas exactement dans le même ordre. Elle est sans effet sur les décisions, puisqu'un logit doit franchir un seuil pour changer de classe et que ces écarts sont des milliers de fois plus petits.
+
+### Exercice 1. Le modèle dans Netron
+
+En ouvrant `sorties/cnn.onnx` dans Netron, je retrouve exactement mon modèle : l'entrée `signal` de forme lot × 1 × 512, puis 5 blocs Conv, Relu, MaxPool avec des poids de forme 8×1×15, 16×8×15, 32×16×15, 32×32×15 et 32×32×15 (le 15 est la taille du noyau), puis `ReduceMean` (la moyenne globale), `Gemm` (la couche linéaire finale, poids 1×32) et `Squeeze`, qui donne la sortie `logit` de forme lot.
+
+![Le graphe du modèle ONNX dans Netron](sorties/netron_cnn_onnx.png)
+
+Netron compte 40 594 paramètres, un de plus que PyTorch (40 593). La différence vient probablement d'une petite constante ajoutée par l'export, comme l'axe à supprimer pour l'opération `Squeeze`, que Netron compte avec les poids.
+
+### Exercice 2. Un signal de 500 échantillons
+
+Ma première tentative, `Xte[:200].reshape(200, 1, 500)`, échouait avant même d'arriver à ONNX Runtime : NumPy refusait de ranger 200 × 512 = 102 400 valeurs dans 200 × 1 × 500 = 100 000 cases. `reshape` réorganise les valeurs mais n'en ajoute ni n'en retire jamais. Il fallait d'abord couper les signaux : `Xte[:200, :500].reshape(200, 1, 500)`.
+
+ONNX Runtime refuse alors l'entrée :
+
+```
+INVALID_ARGUMENT : Got invalid dimensions for input: signal for the following indices
+ index: 2 Got: 500 Expected: 512
+```
+
+L'index 2 est la troisième dimension de l'entrée (lot, canal, longueur), donc la longueur du signal : il a reçu 500 et attendait 512. À l'export, seul l'axe 0 (le nombre de signaux) a été déclaré variable avec `dynamic_axes` ; la longueur a été figée à 512.
+
+Le réseau lui-même pourrait traiter un signal d'une autre longueur, grâce aux convolutions et à la moyenne globale. C'est le fichier ONNX qui impose la contrainte, et c'est plutôt une bonne chose : le modèle a été entraîné sur des signaux de 512 points, avec une zone morte de 100 points et des échos placés à des positions précises. Un appareil qui enverrait des signaux d'une autre longueur, par exemple avec une autre fréquence d'échantillonnage, est rejeté avec une erreur claire au lieu de donner des prédictions fausses sans prévenir. En pratique, il faudrait adapter les signaux à 512 points dans le prétraitement, avec un rééchantillonnage qui respecte l'échelle de temps.

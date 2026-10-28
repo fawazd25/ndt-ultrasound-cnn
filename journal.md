@@ -408,6 +408,12 @@ Ce qui rend l'attaque adverse intéressante pour un attaquant, c'est qu'elle est
 
 Les défenses les plus utiles ne sont pas forcément dans le modèle : signer les signaux dès l'appareil pour détecter toute modification, chiffrer les transmissions, protéger l'accès à l'API et aux poids du modèle, journaliser chaque décision (comme le prévoit l'étape 10), et garder une revue humaine sur un échantillon de pièces. L'entraînement adverse ne vient qu'en complément, et seulement si la menace le justifie, vu son coût sur le rappel.
 
+### ONNX : sortir le modèle de PyTorch, et vérifier après chaque conversion
+
+ONNX est un format d'échange : un fichier qui décrit les couches et les poids du réseau indépendamment de PyTorch, que d'autres programmes et d'autres langages savent lire. ONNX Runtime est un moteur rapide qui exécute ce fichier. Le script vérifie que PyTorch et ONNX Runtime donnent les mêmes sorties : un export peut réussir sans erreur et quand même produire des résultats différents.
+
+Le fichier ONNX fige aussi la forme des entrées. Seul le nombre de signaux par lot est variable ; un signal de 500 points est refusé, alors que le réseau saurait techniquement le traiter. Je trouve ce refus utile : une entrée qui ne ressemble pas aux données d'entraînement doit déclencher une erreur, pas une prédiction silencieusement fausse.
+
 ### Questions encore ouvertes
 
 - Installation réglée : toutes les dépendances du projet (torch 2.14.1, onnx, onnxruntime, flask, scikit-learn...) se sont installées sous Python 3.14, donc je garde cette version. La crainte de départ, que torch ou onnxruntime ne soient pas disponibles pour 3.14, ne s'est pas vérifiée.
