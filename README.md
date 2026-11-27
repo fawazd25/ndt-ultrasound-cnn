@@ -126,7 +126,7 @@ L'API (`08_api_flask.py`) valide chaque entrée (512 nombres finis et bornés), 
 
 ## Limites
 
-Ce que ce projet ne prouve pas :
+En dépit des motivations qui ont donné naissance à ce projet :
 
 - **Les données sont simulées.** Le simulateur reproduit la forme générale d'un A-scan, pas la physique réelle. Un modèle qui réussit ici peut échouer sur de vrais signaux, et c'est même le cas le plus probable sans adaptation.
 - **Un seul type de défaut.** Dans le simulateur, un défaut est toujours une copie de l'impulsion d'entrée, d'amplitude et de position aléatoires, sans type, taille ni orientation. Son écho et l'ombre qu'il projette sur l'écho de fond sont même tirés indépendamment, ce qui n'a pas de sens physique. Le réseau a appris à reconnaître ce défaut-là.
@@ -136,7 +136,7 @@ Ce que ce projet ne prouve pas :
 - **Une augmentation réglée sur les perturbations testées.** Le gain et le bruit de l'augmentation couvrent ce que `05_robustesse.py` mesure ensuite ; sur le terrain, il faudrait les choisir d'après les conditions réelles.
 - **Une robustesse adverse mesurée avec une seule attaque.** FGSM est une attaque simple ; une attaque plus forte comme PGD donnerait sans doute de moins bons résultats.
 - **Un déploiement démonstratif.** L'API n'a ni authentification ni limite de débit ; les latences ont été mesurées sur un MacBook Pro M5, pas sur un appareil embarqué.
-- **Je ne suis pas devenu spécialiste du contrôle non destructif.** J'ai appris une méthode : formuler le problème, battre une référence simple, entraîner, évaluer honnêtement, tester la robustesse, optimiser, déployer et penser à la sécurité.
+- **Je ne suis pas devenu spécialiste de ce domaine (contrôle non destructif).** J'ai appris une méthode : formuler le problème, battre une référence simple, entraîner, évaluer honnêtement, tester la robustesse, optimiser, déployer et penser à la sécurité.
 
 ## Structure du dépôt
 
